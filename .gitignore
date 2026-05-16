@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime data & logs
+usage.jsonl
+conversations/
+*.log
+
+# Config with secrets (use config.example.json as template)
+config.json
+
+# Auto-generated files
+litellm-config.yaml
+
+# OS files
+Thumbs.db
+.DS_Store
+*.exe
+
+# IDE
+.vscode/
+.idea/
+
+# Test artifacts
+test_ua.py

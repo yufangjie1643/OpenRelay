@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LiteLLM Proxy - Login</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--text:#e2e8f0;--muted:#94a3b8;--accent:#38bdf8;--accent2:#818cf8;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:linear-gradient(135deg,var(--bg),#1e1b4b);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center}
+  .login-box{background:var(--card);border:1px solid #334155;border-radius:1rem;padding:2.5rem;width:100%;max-width:400px;box-shadow:0 25px 50px rgba(0,0,0,.4)}
+  .login-box h1{font-size:1.5rem;margin-bottom:.5rem;text-align:center}
+  .login-box p{text-align:center;color:var(--muted);margin-bottom:1.5rem;font-size:.875rem}
+  .form-group{margin-bottom:1rem}
+  label{display:block;font-size:.875rem;color:var(--muted);margin-bottom:.375rem}
+  input{width:100%;padding:.625rem .875rem;border:1px solid #334155;border-radius:.5rem;background:#0f172a;color:var(--text);font-size:.875rem}
+  input:focus{outline:none;border-color:var(--accent)}
+  .btn{width:100%;padding:.625rem;border:none;border-radius:.5rem;background:linear-gradient(90deg,var(--accent),var(--accent2));color:#0f172a;font-weight:700;font-size:.875rem;cursor:pointer;margin-top:.5rem}
+  .btn:hover{opacity:.9}
+  .error{color:#f87171;font-size:.875rem;margin-top:.75rem;text-align:center;display:none}
+</style>
+</head>
+<body>
+<div class="login-box">
+  <h1>LiteLLM Proxy</h1>
+  <p>管理面板登录</p>
+  <div class="form-group">
+    <label>用户名</label>
+    <input type="text" id="username" value="admin">
+  </div>
+  <div class="form-group">
+    <label>密码</label>
+    <input type="password" id="password" placeholder="默认密码: admin123">
+  </div>
+  <button class="btn" onclick="login()">登录</button>
+  <div class="error" id="error"></div>
+</div>
+<script>
+async function login() {
+  const username = document.getElementById('username').value;
+  const password = document.getElementById('password').value;
+  const errorEl = document.getElementById('error');
+  errorEl.style.display = 'none';
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json();
+    if (data.success) {
+      localStorage.setItem('litellm_token', data.token);
+      window.location.href = '/';
+    } else {
+      errorEl.textContent = data.error || '登录失败';
+      errorEl.style.display = 'block';
+    }
+  } catch (e) {
+    errorEl.textContent = '网络错误: ' + e.message;
+    errorEl.style.display = 'block';
+  }
+}
+document.getElementById('password').addEventListener('keypress', e => { if (e.key === 'Enter') login(); });
+</script>
+</body>
+</html>

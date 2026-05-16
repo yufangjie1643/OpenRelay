@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LiteLLM Proxy 管理面板</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--text:#e2e8f0;--muted:#94a3b8;--accent:#38bdf8;--accent2:#818cf8;--danger:#f87171;--ok:#34d399;--warn:#fbbf24;--border:#334155;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
+  header{background:linear-gradient(90deg,var(--accent),var(--accent2));padding:1rem 2rem;box-shadow:0 4px 20px rgba(0,0,0,.3);display:flex;justify-content:space-between;align-items:center}
+  header h1{font-size:1.25rem;font-weight:700}
+  header .user{display:flex;align-items:center;gap:1rem;font-size:.875rem}
+  header .user button{background:rgba(0,0,0,.2);border:none;color:#fff;padding:.375rem .75rem;border-radius:.375rem;cursor:pointer;font-size:.75rem}
+  header .user button:hover{background:rgba(0,0,0,.4)}
+  .container{max-width:1200px;margin:0 auto;padding:1.5rem}
+  .tabs{display:flex;gap:.5rem;margin-bottom:1.5rem;border-bottom:1px solid var(--border);padding-bottom:0;flex-wrap:wrap}
+  .tab{cursor:pointer;padding:.625rem 1.25rem;border:none;background:transparent;color:var(--muted);font-weight:600;font-size:.875rem;border-bottom:2px solid transparent;transition:.2s}
+  .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+  .tab:hover{color:var(--text)}
+  .tab-content{display:none}
+  .tab-content.active{display:block}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:1.25rem;box-shadow:0 4px 6px rgba(0,0,0,.1)}
+  .card h2{font-size:1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.5rem}
+  .badge{font-size:.75rem;padding:.2rem .5rem;border-radius:9999px;background:var(--accent);color:#0f172a;font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:.875rem}
+  th,td{padding:.625rem;text-align:left;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}
+  tr:hover td{background:rgba(255,255,255,.03)}
+  .btn{cursor:pointer;border:none;border-radius:.5rem;padding:.5rem 1rem;font-size:.875rem;font-weight:600;transition:all .2s;display:inline-flex;align-items:center;gap:.375rem}
+  .btn-primary{background:var(--accent);color:#0f172a}
+  .btn-primary:hover{opacity:.9;transform:translateY(-1px)}
+  .btn-danger{background:var(--danger);color:#fff}
+  .btn-warn{background:var(--warn);color:#422006}
+  .btn-sm{padding:.375rem .75rem;font-size:.75rem}
+  .form-group{margin-bottom:1rem}
+  label{display:block;font-size:.875rem;font-weight:500;margin-bottom:.375rem;color:var(--muted)}
+  input,select,textarea{width:100%;padding:.5rem .75rem;border:1px solid var(--border);border-radius:.5rem;background:#0f172a;color:var(--text);font-size:.875rem}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+  textarea{font-family:monospace;min-height:120px;resize:vertical}
+  .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
+  .empty{text-align:center;padding:2rem;color:var(--muted)}
+  .yaml-preview{background:#0f172a;border:1px solid var(--border);border-radius:.5rem;padding:1rem;font-family:monospace;font-size:.8125rem;overflow:auto;max-height:400px;white-space:pre-wrap;color:var(--text)}
+  .toast{position:fixed;bottom:1.5rem;right:1.5rem;padding:.75rem 1.25rem;border-radius:.5rem;background:var(--ok);color:#064e3b;font-weight:600;box-shadow:0 10px 15px rgba(0,0,0,.2);opacity:0;transform:translateY(1rem);transition:all .3s;pointer-events:none;z-index:100}
+  .toast.show{opacity:1;transform:translateY(0)}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+  .modal.active{display:flex}
+  .modal-content{background:var(--card);border:1px solid var(--border);border-radius:.75rem;width:90%;max-width:560px;max-height:90vh;overflow:auto;padding:1.5rem}
+  .modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem}
+  .modal-header h3{font-size:1.125rem}
+  .close-btn{background:none;border:none;color:var(--muted);font-size:1.5rem;cursor:pointer}
+  .close-btn:hover{color:var(--text)}
+  .hint{font-size:.75rem;color:var(--muted);margin-top:.25rem}
+  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem}
+  .stat-card{background:linear-gradient(135deg,#1e293b,#0f172a);border:1px solid var(--border);border-radius:.75rem;padding:1.25rem;text-align:center}
+  .stat-value{font-size:1.75rem;font-weight:800;background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  .stat-label{font-size:.75rem;color:var(--muted);margin-top:.25rem;text-transform:uppercase;letter-spacing:.05em}
+  .price-input{display:flex;gap:.5rem;align-items:center}
+  .price-input input{flex:1}
+  .price-input span{color:var(--muted);font-size:.875rem;white-space:nowrap}
+  .limit-row{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 80px;gap:.75rem;align-items:center;margin-bottom:.75rem}
+  .limit-row.header{font-size:.75rem;color:var(--muted);text-transform:uppercase;font-weight:600;margin-bottom:.5rem}
+  .limit-row input{width:100%}
+  .vk-row{display:grid;grid-template-columns:1.5fr 2fr 1.5fr 1fr 1fr 100px 120px;gap:.75rem;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border)}
+  .vk-row.header{font-size:.75rem;color:var(--muted);text-transform:uppercase;font-weight:600;border-bottom:2px solid var(--border)}
+  .tag{font-size:.75rem;padding:.125rem .375rem;border-radius:.25rem;background:#334155;color:var(--text)}
+  .tag-disabled{background:#451a1a;color:#fca5a5}
+  /* Provider cards */
+  .provider-grid{display:grid;grid-template-columns:1fr;gap:1rem}
+  .provider-card{background:var(--card);border:1px solid var(--border);border-radius:.75rem;overflow:hidden}
+  .provider-header{padding:1rem 1.25rem;background:linear-gradient(90deg,rgba(56,189,248,.1),rgba(129,140,248,.1));display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)}
+  .provider-header h3{font-size:1rem;font-weight:700}
+  .provider-meta{padding:.75rem 1.25rem;font-size:.875rem;color:var(--muted);display:flex;gap:1.5rem;flex-wrap:wrap;border-bottom:1px solid var(--border)}
+  .provider-meta span{display:flex;align-items:center;gap:.25rem}
+  .provider-models{padding:1rem 1.25rem}
+  .provider-models table{font-size:.8125rem}
+  .provider-models th,.provider-models td{padding:.5rem}
+  .provider-actions{padding:0 1.25rem 1rem;display:flex;gap:.5rem}
+  .expand-btn{background:none;border:none;color:var(--accent);font-size:.875rem;cursor:pointer;font-weight:600}
+  /* Conversation detail modal */
+  .conv-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;align-items:center;justify-content:center}
+  .conv-modal.active{display:flex}
+  .conv-box{background:var(--card);border:1px solid var(--border);border-radius:.75rem;width:95%;max-width:1400px;max-height:92vh;display:flex;flex-direction:column;padding:1.25rem 1.5rem 1.5rem}
+  .conv-box .modal-header{margin-bottom:.75rem;flex-shrink:0}
+  .conv-meta{font-size:.8125rem;color:var(--muted);margin-bottom:.75rem;padding-bottom:.5rem;border-bottom:1px solid var(--border);flex-shrink:0}
+  .conv-tabs{display:flex;gap:.5rem;margin-bottom:.75rem;flex-shrink:0}
+  .conv-tab{cursor:pointer;padding:.375rem .875rem;border:1px solid var(--border);border-radius:.375rem;background:transparent;color:var(--muted);font-size:.8rem;font-weight:500;transition:.2s}
+  .conv-tab:hover{color:var(--text);border-color:var(--accent)}
+  .conv-tab.active{background:var(--accent);color:#0f172a;border-color:var(--accent);font-weight:600}
+  .conv-body{flex:1;min-height:0;overflow:hidden}
+  .conv-layout{display:none;height:100%;gap:1rem}
+  .conv-layout.active{display:flex}
+  .conv-layout.stack{flex-direction:column}
+  .conv-layout.side{flex-direction:row}
+  .conv-layout.single .conv-panel{width:100%}
+  .conv-panel{flex:1;min-width:0;display:flex;flex-direction:column}
+  .conv-panel-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.375rem;flex-shrink:0}
+  .conv-panel-title{font-weight:600;font-size:.875rem;color:var(--text)}
+  .conv-panel-stat{font-size:.75rem;color:var(--muted);margin-left:.5rem;font-weight:400}
+  .conv-copy-btn{font-size:.75rem;padding:.25rem .5rem;background:var(--border);border:none;border-radius:.25rem;color:var(--text);cursor:pointer;transition:.2s}
+  .conv-copy-btn:hover{background:var(--accent);color:#0f172a}
+  .conv-pre-wrap{background:#0b1220;border:1px solid var(--border);border-radius:.5rem;padding:.75rem;overflow:auto;flex:1;font-size:.8125rem;line-height:1.6}
+  .conv-pre-wrap pre{margin:0;font-family:'SF Mono',Monaco,'Cascadia Code','Roboto Mono',Consolas,'Courier New',monospace;white-space:pre-wrap;word-break:break-word}
+  .hljs-key{color:#93c5fd}
+  .hljs-string{color:#86efac}
+  .hljs-number{color:#fca5a5}
+  .hljs-boolean{color:#fbbf24}
+  .hljs-null{color:#f472b6}
+  @media(max-width:1100px){.conv-layout.side{flex-direction:column}.conv-box{width:98%;padding:1rem}}
+</style>
+</head>
+<body>
+<header>
+  <h1>LiteLLM Proxy 管理面板</h1>
+  <div class="user">
+    <span id="userName">admin</span>
+    <button onclick="logout()">退出登录</button>
+  </div>
+</header>
+
+<div class="container">
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('models')">模型配置</button>
+    <button class="tab" onclick="switchTab('pricing')">虚拟定价</button>
+    <button class="tab" onclick="switchTab('limits')">限额配置</button>
+    <button class="tab" onclick="switchTab('keys')">虚拟密钥</button>
+    <button class="tab" onclick="switchTab('usage')">用量统计</button>
+    <button class="tab" onclick="switchTab('conversations')">对话记录</button>
+    <button class="tab" onclick="switchTab('connections')">活跃连接</button>
+    <button class="tab" onclick="switchTab('settings')">系统设置</button>
+  </div>
+
+  <!-- Models Tab -->
+  <div class="tab-content active" id="tab-models">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <h2 style="font-size:1.125rem">服务商列表 <span class="badge" id="providerCount">0</span></h2>
+      <button class="btn btn-primary" onclick="openProviderModal()">+ 添加服务商</button>
+    </div>
+    <div class="provider-grid" id="providerGrid"></div>
+    <div style="display:flex;justify-content:flex-end;margin-top:1rem">
+      <button class="btn btn-primary" onclick="saveConfig()">💾 保存模型配置</button>
+    </div>
+    <div class="grid" style="margin-top:1.25rem">
+      <div class="card">
+        <h2>JSON 配置 (providers)</h2>
+        <textarea id="jsonEditor" readonly></textarea>
+      </div>
+      <div class="card">
+        <h2>YAML 输出 (model_list)</h2>
+        <div class="yaml-preview" id="yamlPreview"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pricing Tab -->
+  <div class="tab-content" id="tab-pricing">
+    <div class="card">
+      <h2>虚拟定价 (元 / 1M tokens)</h2>
+      <p style="color:var(--muted);font-size:.875rem;margin-bottom:1rem">设置每个模型的输入/输出/缓存单价，用于估算调用成本。缓存写入(cache_write)仅在部分提供商生效。</p>
+      <table>
+        <thead><tr><th>模型</th><th>输入价格 (元/1M)</th><th>缓存命中 (元/1M)</th><th>缓存写入 (元/1M)</th><th>输出价格 (元/1M)</th></tr></thead>
+        <tbody id="pricingTable"></tbody>
+      </table>
+      <div class="actions"><button class="btn btn-primary" onclick="savePricing()">保存定价</button></div>
+    </div>
+  </div>
+
+  <!-- Limits Tab -->
+  <div class="tab-content" id="tab-limits">
+    <div class="card">
+      <h2>全局限额</h2>
+      <div class="grid">
+        <div class="form-group"><label>全局预算上限 (元)</label><input type="number" step="0.01" id="globalBudget" placeholder="0 = 无限制"></div>
+        <div class="form-group"><label>全局 RPM 上限</label><input type="number" id="globalRPM" placeholder="0 = 无限制"></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:1.25rem">
+      <h2>模型级限额</h2>
+      <div class="limit-row header"><div>模型</div><div>RPM 上限</div><div>预算上限 (元)</div><div></div><div></div><div></div></div>
+      <div id="limitsContainer"></div>
+      <div class="actions"><button class="btn btn-primary" onclick="saveLimits()">保存限额</button></div>
+    </div>
+  </div>
+
+  <!-- Virtual Keys Tab -->
+  <div class="tab-content" id="tab-keys">
+    <div class="card">
+      <h2>虚拟 API Key 管理 <span class="badge" id="vkCount">0</span></h2>
+      <div class="vk-row header"><div>名称</div><div>Key</div><div>允许模型</div><div>预算 (元)</div><div>RPM</div><div>状态</div><div>操作</div></div>
+      <div id="vkContainer"></div>
+      <div class="actions"><button class="btn btn-primary" onclick="openVkModal()">+ 创建密钥</button></div>
+    </div>
+  </div>
+
+  <!-- Usage Tab -->
+  <div class="tab-content" id="tab-usage">
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-value" id="statRequests">0</div><div class="stat-label">总请求数</div></div>
+      <div class="stat-card"><div class="stat-value" id="statInput">0</div><div class="stat-label">Input Tokens</div></div>
+      <div class="stat-card"><div class="stat-value" id="statCached">0</div><div class="stat-label">缓存命中</div></div>
+      <div class="stat-card"><div class="stat-value" id="statOutput">0</div><div class="stat-label">Output Tokens</div></div>
+      <div class="stat-card"><div class="stat-value" id="statCost">¥0.00</div><div class="stat-label">预估总成本</div></div>
+      <div class="stat-card"><div class="stat-value" id="statCacheRate">0%</div><div class="stat-label">缓存命中率</div></div>
+    </div>
+    <div class="actions" style="margin-bottom:1rem">
+      <button class="btn btn-danger" onclick="clearUsage()" title="清空当前 usage.jsonl 所有记录，不可恢复">清空记录</button>
+      <button class="btn btn-secondary" onclick="mergeUsage()" title="将当前 usage.jsonl 归档并清空">归档并清空</button>
+      <button class="btn btn-primary" onclick="exportUsageCsv()" title="导出所有 usage 记录为 CSV">导出 CSV</button>
+    </div>
+    <div class="card"><h2>按模型统计</h2><table><thead><tr><th>模型</th><th>请求数</th><th>Input</th><th>缓存</th><th>Output</th><th>预估成本</th></tr></thead><tbody id="usageByModel"></tbody></table></div>
+    <div class="card" style="margin-top:1.25rem"><h2>按密钥统计</h2><table><thead><tr><th>密钥</th><th>请求数</th><th>预估成本</th></tr></thead><tbody id="usageByKey"></tbody></table></div>
+    <div class="card" style="margin-top:1.25rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+        <h2>最近调用记录</h2>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+          <span style="font-size:.75rem;color:var(--muted)">显示列:</span>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="time" checked> 时间</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="model" checked> 模型</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="key" checked> 密钥</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="input" checked> Input</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="cached" checked> 缓存</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="cached_write"> 缓存写入</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="output" checked> Output</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="cost"> 成本</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="status"> 状态</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="duration" checked> 耗时</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="type" checked> 类型</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="request_id"> 请求ID</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="ua"> UA</label>
+          <label style="font-size:.75rem;cursor:pointer"><input type="checkbox" class="log-col-toggle" value="error"> 错误信息</label>
+        </div>
+      </div>
+      <table><thead id="usageLogsHead"><tr></tr></thead><tbody id="usageLogs"></tbody></table>
+      <div id="usagePagination" style="display:flex;justify-content:space-between;align-items:center;margin-top:1rem;flex-wrap:wrap;gap:.5rem"></div>
+    </div>
+  </div>
+
+  <!-- Conversations Tab -->
+  <div class="tab-content" id="tab-conversations">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <h2>对话记录</h2>
+        <div id="convStorageStatus" style="font-size:.8rem;color:var(--muted)">加载中...</div>
+      </div>
+      <div id="convListContainer">
+        <p style="color:var(--muted)">对话存储未启用或未配置保存目录。请在「系统设置」中配置。</p>
+      </div>
+      <div id="convPagination" style="display:flex;justify-content:space-between;align-items:center;margin-top:1rem;flex-wrap:wrap;gap:.5rem"></div>
+    </div>
+    <div id="convDetailModal" class="conv-modal">
+      <div class="conv-box">
+        <div class="modal-header">
+          <h3 id="convDetailTitle">对话详情</h3>
+          <button class="btn btn-sm" onclick="closeConvDetail()" style="background:var(--border);color:var(--text)">关闭</button>
+        </div>
+        <div id="convMetaInfo" class="conv-meta"></div>
+        <div class="conv-tabs">
+          <button class="conv-tab active" data-mode="side" onclick="setConvLayout('side')">左右分栏</button>
+          <button class="conv-tab" data-mode="stack" onclick="setConvLayout('stack')">上下堆叠</button>
+          <button class="conv-tab" data-mode="input" onclick="setConvLayout('input')">只看请求</button>
+          <button class="conv-tab" data-mode="output" onclick="setConvLayout('output')">只看响应</button>
+        </div>
+        <div id="convDetailBody" class="conv-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connections Tab -->
+  <div class="tab-content" id="tab-connections">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <h2>活跃连接 <span id="connCountBadge" style="font-size:.75rem;background:var(--danger);color:#fff;padding:.15rem .5rem;border-radius:.25rem">0</span></h2>
+        <button class="btn btn-secondary" onclick="loadConnections()">刷新</button>
+      </div>
+      <div id="connListContainer">
+        <p style="color:var(--muted)">暂无活跃连接。</p>
+      </div>
+      <div id="connPagination" style="display:flex;justify-content:space-between;align-items:center;margin-top:1rem;flex-wrap:wrap;gap:.5rem"></div>
+    </div>
+  </div>
+
+  <!-- Settings Tab -->
+  <div class="tab-content" id="tab-settings">
+    <div class="grid">
+      <div class="card">
+        <h2>修改管理员密码</h2>
+        <div class="form-group"><label>旧密码</label><input type="password" id="oldPwd"></div>
+        <div class="form-group"><label>新密码</label><input type="password" id="newPwd"></div>
+        <div class="form-group"><label>确认新密码</label><input type="password" id="newPwd2"></div>
+        <div class="actions"><button class="btn btn-primary" onclick="changePassword()">修改密码</button></div>
+      </div>
+      <div class="card">
+        <h2>对话存储配置</h2>
+        <p style="color:var(--muted);font-size:.875rem;margin-bottom:.75rem">开启后会保存每个请求的完整输入/输出到指定目录（仅保存代理通过的请求）。</p>
+        <div class="form-group">
+          <label><input type="checkbox" id="convEnabled"> 启用对话存储</label>
+        </div>
+        <div class="form-group">
+          <label>保存目录（绝对路径）</label>
+          <input type="text" id="convDirectory" placeholder="例如: D:\\litellm-conversations">
+          <p class="hint">目录不存在会自动创建。留空则不保存。</p>
+        </div>
+        <div class="actions"><button class="btn btn-primary" onclick="saveConversationStorage()">保存配置</button></div>
+      </div>
+      <div class="card">
+        <h2>代理端点</h2>
+        <p style="color:var(--muted);font-size:.875rem;margin-bottom:.75rem">带用量统计 + 限额 + 密钥校验：</p>
+        <div class="yaml-preview">http://localhost:8080/proxy/v1/chat/completions</div>
+        <p style="color:var(--muted);font-size:.875rem;margin-top:.75rem">直接走 LiteLLM（无统计）：</p>
+        <div class="yaml-preview">http://localhost:4000/v1/chat/completions</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Provider Modal -->
+<div class="modal" id="providerModal">
+  <div class="modal-content">
+    <div class="modal-header"><h3 id="providerModalTitle">添加服务商</h3><button class="close-btn" onclick="closeProviderModal()">&times;</button></div>
+    <div class="form-group"><label>服务商名称</label><input type="text" id="pName" placeholder="例如: OpenAI 官方"></div>
+    <div class="form-group"><label>类型</label><select id="pType"><option value="openai">OpenAI / OpenAI-Compatible</option><option value="anthropic">Anthropic (Claude)</option><option value="gemini">Google Gemini</option><option value="openai-custom">OpenAI-Compatible (自定义地址)</option></select></div>
+    <div class="form-group"><label>API Base URL (可选)</label><input type="text" id="pBase" placeholder="https://api.openai.com/v1"></div>
+    <div class="form-group"><label>API Key</label><input type="text" id="pKey" placeholder="sk-... 或 os.environ/XXX"></div>
+    <div class="form-group">
+      <label>User-Agent</label>
+      <select id="pUASelect" onchange="onUAChange()">
+        <option value="OpenClaw-Gateway/1.0">OpenClaw-Gateway/1.0</option>
+        <option value="opencode/1.0.0">opencode/1.0.0 (OpenCode CLI)</option>
+        <option value="claude-cli/2.0.0 (external, cli)">claude-cli/2.0.0 (Claude Code)</option>
+        <option value="codex_cli_rs/0.1.0">codex_cli_rs/0.1.0 (OpenAI Codex CLI)</option>
+        <option value="copilot-cli/1.0.0">copilot-cli/1.0.0 (GitHub Copilot CLI)</option>
+        <option value="cursor-agent/1.0.0">cursor-agent/1.0.0 (Cursor Agent)</option>
+        <option value="gemini-cli/1.0.0">gemini-cli/1.0.0 (Gemini CLI)</option>
+        <option value="litellm/Python">litellm/Python (LiteLLM)</option>
+        <option value="custom">自定义...</option>
+      </select>
+      <input type="text" id="pUACustom" style="display:none;margin-top:.5rem" placeholder="输入自定义 User-Agent">
+    </div>
+    <div class="form-group">
+      <button class="btn btn-warn" id="testProviderBtn" onclick="testProvider()">🔌 测试连通性并获取模型</button>
+      <div id="testResult" style="margin-top:.5rem;font-size:.875rem"></div>
+    </div>
+    <div id="fetchedModels" style="display:none;margin-bottom:1rem">
+      <div style="font-size:.875rem;font-weight:600;margin-bottom:.5rem">获取到的模型（勾选要添加的）</div>
+      <div id="fetchedModelsList" style="max-height:200px;overflow:auto;border:1px solid var(--border);border-radius:.5rem;padding:.5rem;background:#0f172a"></div>
+      <div style="margin-top:.5rem;display:flex;gap:.5rem">
+        <button class="btn btn-sm" onclick="selectAllFetched(true)">全选</button>
+        <button class="btn btn-sm" onclick="selectAllFetched(false)">全不选</button>
+      </div>
+    </div>
+    <div class="actions"><button class="btn btn-danger btn-sm" onclick="closeProviderModal()">取消</button><button class="btn btn-primary" id="saveProviderBtn" onclick="saveProvider()">确认</button></div>
+  </div>
+</div>
+
+
+
+<!-- Virtual Key Modal -->
+<div class="modal" id="vkModal">
+  <div class="modal-content">
+    <div class="modal-header"><h3 id="vkModalTitle">创建虚拟密钥</h3><button class="close-btn" onclick="closeVkModal()">&times;</button></div>
+    <div class="form-group"><label>名称</label><input type="text" id="vkName" placeholder="例如: 团队A"></div>
+    <div class="form-group">
+      <label>允许模型</label>
+      <div style="display:flex;gap:.5rem;margin-bottom:.5rem">
+        <button class="btn btn-sm btn-primary" onclick="detectModels()">🔍 探测供应商可用模型</button>
+        <button class="btn btn-sm" onclick="toggleAllDetected(true)">全选</button>
+        <button class="btn btn-sm" onclick="toggleAllDetected(false)">全不选</button>
+      </div>
+      <div id="vkModelsContainer" style="max-height:200px;overflow:auto;border:1px solid var(--border);border-radius:.5rem;padding:.5rem;background:#0f172a">
+        <div style="color:var(--muted);font-size:.875rem;padding:.5rem">点击上方按钮获取真实可用模型列表</div>
+      </div>
+      <div class="hint">通过真实 API Key 向供应商查询的可用模型。不选 = 允许全部。</div>
+    </div>
+    <div class="form-group"><label>预算上限 (元)</label><input type="number" step="0.01" id="vkBudget" placeholder="0 = 无限制"></div>
+    <div class="form-group"><label>RPM 上限</label><input type="number" id="vkRPM" placeholder="0 = 无限制"></div>
+    <div class="form-group"><label>过期时间</label><input type="datetime-local" id="vkExpires"></div>
+    <div class="form-group"><label><input type="checkbox" id="vkEnabled" checked> 启用</label></div>
+    <div class="actions"><button class="btn btn-danger btn-sm" onclick="closeVkModal()">取消</button><button class="btn btn-primary" onclick="saveVk()">确认</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast">保存成功</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+<script>
+const token = localStorage.getItem('litellm_token');
+if (!token) window.location.href = '/login.html';
+
+let config = { providers: [], pricing: {}, limits: {}, virtual_keys: [], router_settings: { timeout: 60 }, litellm_settings: { drop_params: true, allowed_headers: ['*'] }, general_settings: { master_key: 'sk-litellm-master-key' } };
+let editingProviderIndex = -1, editingModelIndex = -1, editingVkIndex = -1;
+let detectedModels = [];
+let providerTested = false, providerTestedModels = [], providerOriginalKey = '', providerOriginalBase = '';  // for provider modal
+
+async function api(path, opts = {}) {
+  opts.headers = opts.headers || {};
+  opts.headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(path, opts);
+  if (res.status === 401) { localStorage.removeItem('litellm_token'); window.location.href = '/login.html'; }
+  return res;
+}
+
+async function load() {
+  const res = await api('/api/config');
+  config = await res.json();
+  renderProviders();
+  renderPricing();
+  renderLimits();
+  renderVirtualKeys();
+  applyLogColState();
+  document.querySelectorAll('.log-col-toggle').forEach(cb => cb.addEventListener('change', () => { saveLogColState(); loadUsage(); }));
+  // Init conversation storage settings
+  const cs = config.conversation_storage || { enabled: false, directory: '' };
+  document.getElementById('convEnabled').checked = cs.enabled;
+  document.getElementById('convDirectory').value = cs.directory || '';
+  // Restore active tab
+  const savedTab = localStorage.getItem('active_tab') || 'models';
+  switchTab(savedTab);
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => {
+    if (t.getAttribute('onclick') && t.getAttribute('onclick').includes(`'${name}'`)) t.classList.add('active');
+  });
+  document.getElementById('tab-' + name).classList.add('active');
+  localStorage.setItem('active_tab', name);
+  if (name === 'usage') { applyLogColState(); loadUsage(); }
+  if (name === 'conversations') loadConversations();
+  if (name === 'connections') loadConnections();
+}
+
+// Derive flat model list from providers for pricing/limits/keys/usage
+function getAllModels() {
+  const list = [];
+  (config.providers || []).forEach((prov, pi) => {
+    (prov.models || []).forEach((m, mi) => {
+      list.push({ ...m, provider_index: pi, model_index: mi, provider_name: prov.name, provider_type: prov.type });
+    });
+  });
+  return list;
+}
+
+// ---------- Providers ----------
+function renderProviders() {
+  const grid = document.getElementById('providerGrid');
+  grid.innerHTML = '';
+  const providers = config.providers || [];
+  document.getElementById('providerCount').textContent = providers.length;
+  providers.forEach((prov, pi) => {
+    const card = document.createElement('div');
+    card.className = 'provider-card';
+    const keyMasked = prov.api_key ? (prov.api_key.startsWith('os.environ/') ? prov.api_key : prov.api_key.slice(0, 8) + '****' + prov.api_key.slice(-4)) : '-';
+    const modelsHtml = (prov.models || []).map((m, mi) => {
+      return `<tr><td><strong>${m.model_name}</strong></td><td><button class="btn btn-sm btn-danger" onclick="deleteModel(${pi},${mi})">删除</button></td></tr>`;
+    }).join('');
+    card.innerHTML = `
+      <div class="provider-header">
+        <div><h3>${prov.name}</h3><span class="badge">${prov.type}</span></div>
+        <div style="display:flex;gap:.5rem">
+          <button class="btn btn-sm btn-primary" onclick="editProvider(${pi})">编辑</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteProvider(${pi})">删除</button>
+        </div>
+      </div>
+      <div class="provider-meta">
+        <span>🔗 ${prov.base_url || '默认'}</span>
+        <span>🔑 ${keyMasked}</span>
+        <span>🌐 ${prov.user_agent || 'OpenClaw-Gateway/1.0'}</span>
+      </div>
+      <div class="provider-models">
+        <table><thead><tr><th>模型别名</th><th>操作</th></tr></thead><tbody>${modelsHtml || '<tr><td colspan="2" style="color:var(--muted)">暂无模型，编辑后测试连通性可自动获取</td></tr>'}</tbody></table>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+  document.getElementById('jsonEditor').value = JSON.stringify(config, null, 2);
+  document.getElementById('yamlPreview').textContent = jsyaml.dump(flattenForYAML(config), { lineWidth: -1 });
+}
+
+function flattenForYAML(cfg) {
+  const out = { ...cfg };
+  delete out.providers;
+  delete out.admin;
+  delete out.pricing;
+  delete out.limits;
+  delete out.virtual_keys;
+  out.model_list = [];
+  for (const prov of cfg.providers || []) {
+    for (const m of prov.models || []) {
+      const prefix = prov.type === 'gemini' ? 'gemini' : prov.type === 'anthropic' ? 'anthropic' : 'openai';
+      const entry = { model_name: m.model_name, litellm_params: { model: `${prefix}/${m.model_id}`, api_key: prov.api_key, extra_headers: { 'User-Agent': prov.user_agent || 'OpenClaw-Gateway/1.0' } } };
+      if (prov.base_url) entry.litellm_params.api_base = prov.base_url;
+      out.model_list.push(entry);
+    }
+  }
+  return out;
+}
+
+function getUAValue() {
+  const sel = document.getElementById('pUASelect').value;
+  if (sel === 'custom') return document.getElementById('pUACustom').value.trim();
+  return sel;
+}
+function setUAValue(val) {
+  const select = document.getElementById('pUASelect');
+  const custom = document.getElementById('pUACustom');
+  const known = Array.from(select.options).map(o => o.value);
+  if (known.includes(val)) { select.value = val; custom.style.display = 'none'; }
+  else { select.value = 'custom'; custom.style.display = 'block'; custom.value = val; }
+}
+function onUAChange() {
+  const sel = document.getElementById('pUASelect').value;
+  document.getElementById('pUACustom').style.display = sel === 'custom' ? 'block' : 'none';
+}
+function resetProviderTestState() {
+  providerTested = false;
+  providerTestedModels = [];
+  providerOriginalKey = '';
+  providerOriginalBase = '';
+  document.getElementById('testResult').innerHTML = '';
+  document.getElementById('fetchedModels').style.display = 'none';
+  document.getElementById('fetchedModelsList').innerHTML = '';
+  document.getElementById('testProviderBtn').disabled = false;
+  document.getElementById('testProviderBtn').textContent = '🔌 测试连通性并获取模型';
+}
+function openProviderModal() {
+  editingProviderIndex = -1;
+  resetProviderTestState();
+  document.getElementById('providerModalTitle').textContent = '添加服务商';
+  document.getElementById('pName').value = '';
+  document.getElementById('pType').value = 'openai';
+  document.getElementById('pBase').value = '';
+  document.getElementById('pKey').value = 'os.environ/OPENAI_API_KEY';
+  setUAValue('OpenClaw-Gateway/1.0');
+  document.getElementById('providerModal').classList.add('active');
+}
+function editProvider(i) {
+  editingProviderIndex = i;
+  const prov = config.providers[i];
+  providerOriginalKey = prov.api_key || '';
+  providerOriginalBase = prov.base_url || '';
+  providerTested = true; // existing provider is considered tested
+  providerTestedModels = [];
+  document.getElementById('providerModalTitle').textContent = '编辑服务商';
+  document.getElementById('pName').value = prov.name;
+  document.getElementById('pType').value = prov.type;
+  document.getElementById('pBase').value = prov.base_url || '';
+  document.getElementById('pKey').value = prov.api_key;
+  setUAValue(prov.user_agent || 'OpenClaw-Gateway/1.0');
+  document.getElementById('testResult').innerHTML = '<span style="color:var(--ok)">✓ 已验证渠道</span>';
+  document.getElementById('fetchedModels').style.display = 'none';
+  document.getElementById('providerModal').classList.add('active');
+}
+function closeProviderModal() { document.getElementById('providerModal').classList.remove('active'); resetProviderTestState(); }
+async function testProvider() {
+  const type = document.getElementById('pType').value;
+  const base = document.getElementById('pBase').value.trim();
+  const key = document.getElementById('pKey').value.trim();
+  const ua = getUAValue();
+  if (!key) { alert('请先填写 API Key'); return; }
+
+  const btn = document.getElementById('testProviderBtn');
+  const resultDiv = document.getElementById('testResult');
+  btn.disabled = true;
+  btn.textContent = '测试中...';
+  resultDiv.innerHTML = '<span style="color:var(--accent)">正在测试连通性...</span>';
+
+  try {
+    const res = await api('/api/test-provider', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, base_url: base, api_key: key, user_agent: ua }) });
+    const data = await res.json();
+    if (data.success) {
+      providerTested = true;
+      providerTestedModels = data.models || [];
+      resultDiv.innerHTML = `<span style="color:var(--ok)">✓ 连通成功！获取到 ${data.models.length} 个模型</span>`;
+      renderFetchedModels(data.models);
+      document.getElementById('fetchedModels').style.display = 'block';
+    } else {
+      providerTested = false;
+      resultDiv.innerHTML = `<span style="color:var(--danger)">✗ 测试失败: ${data.error || '未知错误'}</span>`;
+      document.getElementById('fetchedModels').style.display = 'none';
+    }
+  } catch (e) {
+    providerTested = false;
+    resultDiv.innerHTML = `<span style="color:var(--danger)">✗ 请求异常: ${e.message}</span>`;
+    document.getElementById('fetchedModels').style.display = 'none';
+  }
+  btn.disabled = false;
+  btn.textContent = '🔌 测试连通性并获取模型';
+}
+function renderFetchedModels(models) {
+  const container = document.getElementById('fetchedModelsList');
+  container.innerHTML = '';
+  if (!models.length) { container.innerHTML = '<div style="color:var(--muted)">未获取到模型列表</div>'; return; }
+  models.forEach(m => {
+    const div = document.createElement('label');
+    div.style.cssText = 'display:flex;align-items:center;gap:.5rem;padding:.25rem 0;cursor:pointer;font-size:.875rem';
+    div.innerHTML = `<input type="checkbox" class="fetched-model-cb" value="${m.id}" checked> <span><strong>${m.id}</strong> <span style="color:var(--muted);font-size:.75rem">${m.owned_by || ''}</span></span>`;
+    container.appendChild(div);
+  });
+}
+function selectAllFetched(checked) {
+  document.querySelectorAll('.fetched-model-cb').forEach(cb => cb.checked = checked);
+}
+function getSelectedFetchedModels() {
+  return Array.from(document.querySelectorAll('.fetched-model-cb:checked')).map(cb => cb.value);
+}
+function saveProvider() {
+  const name = document.getElementById('pName').value.trim();
+  const type = document.getElementById('pType').value;
+  const base = document.getElementById('pBase').value.trim();
+  const key = document.getElementById('pKey').value.trim();
+  const ua = getUAValue();
+  if (!name || !key) { alert('请填写完整信息'); return; }
+
+  // New provider must be tested; editing provider must be re-tested if key/base changed
+  const isNew = editingProviderIndex < 0;
+  const keyChanged = !isNew && (key !== providerOriginalKey || base !== providerOriginalBase);
+  if (isNew && !providerTested) { alert('请先点击「测试连通性并获取模型」，测试通过后才能保存'); return; }
+  if (keyChanged && !providerTested) { alert('API Key 或 Base URL 已变更，请重新测试连通性'); return; }
+
+  const prov = { id: crypto.randomUUID(), name, type, api_key: key, user_agent: ua };
+  if (base) prov.base_url = base;
+
+  if (editingProviderIndex >= 0) {
+    prov.id = config.providers[editingProviderIndex].id;
+    const existing = config.providers[editingProviderIndex].models || [];
+    if (providerTestedModels.length > 0) {
+      const selected = getSelectedFetchedModels();
+      prov.models = selected.map(id => ({ model_name: id, model_id: id }));
+    } else {
+      prov.models = existing;
+    }
+    config.providers[editingProviderIndex] = prov;
+  } else {
+    const selected = getSelectedFetchedModels();
+    prov.models = selected.map(id => ({ model_name: id, model_id: id }));
+    config.providers.push(prov);
+  }
+  closeProviderModal();
+  renderProviders();
+}
+function deleteProvider(i) {
+  if (!confirm(`确定删除服务商 "${config.providers[i].name}"？其下的所有模型也会被删除。`)) return;
+  config.providers.splice(i, 1);
+  renderProviders();
+}
+
+function deleteModel(pi, mi) {
+  if (!confirm('确定删除此模型？')) return;
+  config.providers[pi].models.splice(mi, 1);
+  renderProviders();
+}
+async function saveConfig() {
+  const res = await api('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) });
+  const data = await res.json();
+  if (data.success) {
+    toast('配置已保存，正在重启代理...');
+    load();
+    // Restart LiteLLM proxy to pick up new litellm-config.yaml
+    setTimeout(async () => {
+      try {
+        const r2 = await api('/api/restart-proxy', { method: 'POST' });
+        const d2 = await r2.json();
+        if (d2.success) { toast('代理已重启 (PID: ' + d2.pid + ')'); }
+        else { toast('代理重启失败: ' + (d2.error || '未知错误')); }
+      } catch (e) {
+        toast('代理重启请求失败');
+      }
+    }, 500);
+  } else {
+    alert('保存失败: ' + (data.error || '未知错误'));
+  }
+}
+
+// ---------- Pricing ----------
+function renderPricing() {
+  const tbody = document.getElementById('pricingTable');
+  tbody.innerHTML = '';
+  getAllModels().forEach(item => {
+    const name = item.model_name;
+    const p = config.pricing[name] || { input: 0, cached_input: 0, cached_write: 0, output: 0 };
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><strong>${name}</strong> <span style="color:var(--muted);font-size:.75rem">(${item.provider_name})</span></td><td><div class="price-input"><input type="number" step="0.01" data-model="${name}" data-type="input" value="${p.input || 0}"><span>元/1M</span></div></td><td><div class="price-input"><input type="number" step="0.01" data-model="${name}" data-type="cached_input" value="${p.cached_input || 0}"><span>元/1M</span></div></td><td><div class="price-input"><input type="number" step="0.01" data-model="${name}" data-type="cached_write" value="${p.cached_write || 0}"><span>元/1M</span></div></td><td><div class="price-input"><input type="number" step="0.01" data-model="${name}" data-type="output" value="${p.output || 0}"><span>元/1M</span></div></td>`;
+    tbody.appendChild(tr);
+  });
+}
+async function savePricing() {
+  const pricing = {};
+  document.querySelectorAll('#pricingTable input').forEach(inp => {
+    const model = inp.dataset.model, type = inp.dataset.type;
+    if (!pricing[model]) pricing[model] = { input: 0, cached_input: 0, cached_write: 0, output: 0 };
+    pricing[model][type] = parseFloat(inp.value) || 0;
+  });
+  const res = await api('/api/pricing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pricing) });
+  if ((await res.json()).success) { toast('定价已保存'); config.pricing = pricing; }
+}
+
+// ---------- Limits ----------
+function renderLimits() {
+  const limits = config.limits || {};
+  document.getElementById('globalBudget').value = limits.global?.budget || '';
+  document.getElementById('globalRPM').value = limits.global?.rpm || '';
+  const container = document.getElementById('limitsContainer');
+  container.innerHTML = '';
+  getAllModels().forEach(item => {
+    const name = item.model_name;
+    const l = limits[name] || { rpm: '', budget: '' };
+    const row = document.createElement('div');
+    row.className = 'limit-row';
+    row.innerHTML = `<div><strong>${name}</strong> <span style="color:var(--muted);font-size:.75rem">(${item.provider_name})</span></div><div><input type="number" data-limit-model="${name}" data-limit-type="rpm" value="${l.rpm || ''}" placeholder="不限"></div><div><input type="number" step="0.01" data-limit-model="${name}" data-limit-type="budget" value="${l.budget || ''}" placeholder="不限"></div><div></div><div></div><div></div>`;
+    container.appendChild(row);
+  });
+}
+async function saveLimits() {
+  const limits = { global: {} };
+  const gb = parseFloat(document.getElementById('globalBudget').value);
+  const gr = parseInt(document.getElementById('globalRPM').value);
+  if (gb) limits.global.budget = gb;
+  if (gr) limits.global.rpm = gr;
+  document.querySelectorAll('[data-limit-model]').forEach(inp => {
+    const model = inp.dataset.limitModel;
+    const type = inp.dataset.limitType;
+    const val = type === 'rpm' ? parseInt(inp.value) : parseFloat(inp.value);
+    if (val) {
+      if (!limits[model]) limits[model] = {};
+      limits[model][type] = val;
+    }
+  });
+  const res = await api('/api/limits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(limits) });
+  if ((await res.json()).success) { toast('限额已保存'); config.limits = limits; }
+}
+
+// ---------- Virtual Keys ----------
+function renderVirtualKeys() {
+  const container = document.getElementById('vkContainer');
+  container.innerHTML = '';
+  const keys = config.virtual_keys || [];
+  document.getElementById('vkCount').textContent = keys.length;
+  keys.forEach((k, i) => {
+    const row = document.createElement('div');
+    row.className = 'vk-row';
+    const models = k.allowed_models && k.allowed_models.length ? k.allowed_models.map(m => `<span class="tag">${m}</span>`).join(' ') : '<span class="tag">全部</span>';
+    const status = k.enabled !== false ? '<span class="tag">启用</span>' : '<span class="tag tag-disabled">禁用</span>';
+    row.innerHTML = `<div>${k.name}</div><div><code>${k.key}</code></div><div>${models}</div><div>${k.budget || '无限制'}</div><div>${k.rpm || '无限制'}</div><div>${status}</div><div><button class="btn btn-sm btn-primary" onclick="editVk(${i})">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteVk(${i})">删除</button></div>`;
+    container.appendChild(row);
+  });
+}
+function renderVkModelSelector(selectedModels = []) {
+  const container = document.getElementById('vkModelsContainer');
+  container.innerHTML = '';
+  const models = getAllModels();
+  if (models.length) {
+    const localDiv = document.createElement('div');
+    localDiv.innerHTML = '<div style="font-size:.75rem;color:var(--muted);margin-bottom:.25rem">已配置模型</div>';
+    models.forEach(m => {
+      const prefix = m.provider_type === 'gemini' ? 'gemini/' : m.provider_type === 'anthropic' ? 'anthropic/' : 'openai/';
+      const label = `${m.model_name} → ${prefix}${m.model_id} <span style="color:var(--muted)">(${m.provider_name})</span>`;
+      const checked = selectedModels.includes(m.model_name) ? 'checked' : '';
+      localDiv.innerHTML += `<label style="display:flex;align-items:center;gap:.5rem;padding:.25rem 0;cursor:pointer;font-size:.875rem"><input type="checkbox" class="vk-model-cb" value="${m.model_name}" ${checked}> <span>${label}</span></label>`;
+    });
+    container.appendChild(localDiv);
+  }
+  if (detectedModels.length) {
+    const detDiv = document.createElement('div');
+    detDiv.style.marginTop = '.5rem';
+    detDiv.innerHTML = '<div style="font-size:.75rem;color:var(--muted);margin-bottom:.25rem">探测到的真实可用模型</div>';
+    detectedModels.forEach(dm => {
+      const display = dm.local_alias ? `${dm.local_alias} → ${dm.provider}/${dm.id}` : `${dm.provider}/${dm.id}`;
+      const val = dm.local_alias || `${dm.provider}/${dm.id}`;
+      const checked = selectedModels.includes(val) || selectedModels.includes(dm.local_alias) ? 'checked' : '';
+      const unmapped = dm.local_alias ? '' : ' <span style="color:var(--warn);font-size:.75rem">(未配置)</span>';
+      detDiv.innerHTML += `<label style="display:flex;align-items:center;gap:.5rem;padding:.25rem 0;cursor:pointer;font-size:.875rem"><input type="checkbox" class="vk-model-cb" value="${val}" ${checked} ${dm.local_alias ? '' : 'disabled'}> <span>${display}</span>${unmapped}</label>`;
+    });
+    container.appendChild(detDiv);
+  }
+  if (!models.length && !detectedModels.length) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:.875rem;padding:.5rem">暂无模型</div>';
+  }
+}
+async function detectModels() {
+  const container = document.getElementById('vkModelsContainer');
+  container.innerHTML = '<div style="color:var(--accent);font-size:.875rem;padding:.5rem">正在探测供应商可用模型...</div>';
+  const res = await api('/api/detect-models');
+  const data = await res.json();
+  detectedModels = data.models || [];
+  const selected = getSelectedVkModels();
+  renderVkModelSelector(selected);
+  if (data.errors && data.errors.length) {
+    toast(`探测完成: ${data.count} 个模型, ${data.errors.length} 个供应商失败`);
+  } else {
+    toast(`探测完成: ${data.count} 个可用模型`);
+  }
+}
+function getSelectedVkModels() {
+  return Array.from(document.querySelectorAll('.vk-model-cb:checked')).map(cb => cb.value);
+}
+function toggleAllDetected(checked) {
+  document.querySelectorAll('.vk-model-cb:not([disabled])').forEach(cb => cb.checked = checked);
+}
+function openVkModal() {
+  editingVkIndex = -1; detectedModels = [];
+  document.getElementById('vkModalTitle').textContent = '创建虚拟密钥';
+  document.getElementById('vkName').value = '';
+  document.getElementById('vkBudget').value = '';
+  document.getElementById('vkRPM').value = '';
+  document.getElementById('vkExpires').value = '';
+  document.getElementById('vkEnabled').checked = true;
+  renderVkModelSelector([]);
+  document.getElementById('vkModal').classList.add('active');
+}
+function editVk(i) {
+  editingVkIndex = i; detectedModels = [];
+  const k = config.virtual_keys[i];
+  document.getElementById('vkModalTitle').textContent = '编辑虚拟密钥';
+  document.getElementById('vkName').value = k.name;
+  document.getElementById('vkBudget').value = k.budget || '';
+  document.getElementById('vkRPM').value = k.rpm || '';
+  document.getElementById('vkExpires').value = k.expires_at ? k.expires_at.slice(0, 16) : '';
+  document.getElementById('vkEnabled').checked = k.enabled !== false;
+  renderVkModelSelector(k.allowed_models || []);
+  document.getElementById('vkModal').classList.add('active');
+}
+function closeVkModal() { document.getElementById('vkModal').classList.remove('active'); }
+async function saveVk() {
+  const name = document.getElementById('vkName').value.trim();
+  const budget = parseFloat(document.getElementById('vkBudget').value) || 0;
+  const rpm = parseInt(document.getElementById('vkRPM').value) || 0;
+  const expires = document.getElementById('vkExpires').value;
+  const enabled = document.getElementById('vkEnabled').checked;
+  const allowed = getSelectedVkModels();
+  if (!name) { alert('请输入名称'); return; }
+  const payload = { name, budget: budget || undefined, rpm: rpm || undefined, expires_at: expires ? new Date(expires).toISOString() : undefined, enabled, allowed_models: allowed.length ? allowed : undefined };
+  if (editingVkIndex >= 0) {
+    const res = await api(`/api/virtual-keys/${editingVkIndex}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if ((await res.json()).success) { toast('密钥已更新'); closeVkModal(); load(); }
+  } else {
+    const res = await api('/api/virtual-keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await res.json();
+    if (data.success) { alert(`创建成功！密钥: ${data.key.key}`); closeVkModal(); load(); }
+  }
+}
+async function deleteVk(i) { if (!confirm('确定删除此密钥？')) return; const res = await api(`/api/virtual-keys/${i}`, { method: 'DELETE' }); if ((await res.json()).success) { toast('已删除'); load(); } }
+
+// ---------- Usage ----------
+const LOG_COLUMNS = {
+  time: { label: '时间', render: e => new Date(e.timestamp).toLocaleString() },
+  model: { label: '模型', render: e => e.model },
+  key: { label: '密钥', render: e => e.key_name || 'master' },
+  input: { label: 'Input', render: e => e.input_tokens || 0 },
+  cached: { label: '缓存', render: e => e.cached_tokens || 0 },
+  cached_write: { label: '缓存写入', render: e => e.cached_write_tokens || 0 },
+  output: { label: 'Output', render: e => e.output_tokens || 0 },
+  cost: { label: '成本', render: e => '¥' + (e.cost || 0).toFixed(4) },
+  status: { label: '状态', render: e => `<span style="color:${(e.status||200)>=400?'var(--danger)':'var(--success)'}">${e.status || '-'}</span>` },
+  duration: { label: '耗时', render: e => e.duration_ms + 'ms' },
+  type: { label: '类型', render: e => e.stream ? 'Stream' : 'Sync' },
+  request_id: { label: '请求ID', render: e => `<span style="font-size:.7rem;color:var(--muted)">${e.request_id || '-'}</span>` },
+  ua: { label: 'UA', render: e => `<span style="font-size:.7rem;color:var(--muted);max-width:200px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(e.user_agent || '-').replace(/"/g, '&quot;')}">${e.user_agent || '-'}</span>` },
+  error: { label: '错误信息', render: e => e.error ? `<span style="color:var(--danger);font-size:.8rem">${e.error}</span>` : '-' }
+};
+function getLogColState() {
+  try { return JSON.parse(localStorage.getItem('usage_log_cols')); } catch {}
+  return null;
+}
+function saveLogColState() {
+  const state = {};
+  document.querySelectorAll('.log-col-toggle').forEach(cb => { state[cb.value] = cb.checked; });
+  localStorage.setItem('usage_log_cols', JSON.stringify(state));
+}
+function applyLogColState() {
+  const state = getLogColState();
+  if (!state) return;
+  document.querySelectorAll('.log-col-toggle').forEach(cb => { if (state[cb.value] !== undefined) cb.checked = state[cb.value]; });
+}
+let usagePage = 1;
+let usagePageSize = 20;
+let convPage = 1;
+let convPageSize = 20;
+let connPage = 1;
+let connPageSize = 20;
+
+async function loadUsage(page, pageSize) {
+  if (page !== undefined) usagePage = page;
+  if (pageSize !== undefined) usagePageSize = pageSize;
+  const res = await api(`/api/usage?page=${usagePage}&pageSize=${usagePageSize}`);
+  const data = await res.json();
+  const stats = data.stats;
+  const pg = data.pagination || { page: 1, pageSize: 20, total: 0, totalPages: 1 };
+  document.getElementById('statRequests').textContent = stats.totalRequests.toLocaleString();
+  document.getElementById('statInput').textContent = stats.totalInputTokens.toLocaleString();
+  document.getElementById('statCached').textContent = stats.totalCachedTokens.toLocaleString();
+  document.getElementById('statOutput').textContent = stats.totalOutputTokens.toLocaleString();
+  document.getElementById('statCost').textContent = '¥' + stats.totalCost.toFixed(4);
+  document.getElementById('statCacheRate').textContent = stats.cacheHitRate + '%';
+  const ubm = document.getElementById('usageByModel');
+  ubm.innerHTML = '';
+  Object.entries(stats.byModel).forEach(([model, s]) => { const tr = document.createElement('tr'); tr.innerHTML = `<td>${model}</td><td>${s.requests}</td><td>${s.input_tokens.toLocaleString()}</td><td>${(s.cached_tokens || 0).toLocaleString()}</td><td>${s.output_tokens.toLocaleString()}</td><td>¥${s.cost.toFixed(4)}</td>`; ubm.appendChild(tr); });
+  const ubk = document.getElementById('usageByKey');
+  ubk.innerHTML = '';
+  Object.entries(stats.byKey).forEach(([key, s]) => { const tr = document.createElement('tr'); tr.innerHTML = `<td>${key}</td><td>${s.requests}</td><td>¥${s.cost.toFixed(4)}</td>`; ubk.appendChild(tr); });
+  // Render usage logs with column selector
+  const activeCols = Array.from(document.querySelectorAll('.log-col-toggle')).filter(cb => cb.checked).map(cb => cb.value);
+  const thead = document.getElementById('usageLogsHead');
+  thead.innerHTML = '<tr>' + activeCols.map(c => `<th>${LOG_COLUMNS[c].label}</th>`).join('') + '</tr>';
+  const logBody = document.getElementById('usageLogs');
+  logBody.innerHTML = '';
+  data.entries.forEach(e => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = activeCols.map(c => `<td>${LOG_COLUMNS[c].render(e)}</td>`).join('');
+    logBody.appendChild(tr);
+  });
+  // Render pagination
+  renderPagination('usagePagination', pg, (p) => loadUsage(p), (ps) => loadUsage(1, ps));
+}
+function renderPagination(containerId, pg, onPageChange, onPageSizeChange) {
+  const el = document.getElementById(containerId);
+  if (!el || !pg) return;
+  const { page, pageSize, total, totalPages } = pg;
+  let html = '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">';
+  html += '<span style="font-size:.75rem;color:var(--muted)">每页</span>';
+  html += `<select id="${containerId}_size" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:.25rem;padding:.25rem .5rem;font-size:.75rem">`;
+  [10, 20, 50, 100].forEach(s => { html += `<option value="${s}"${s === pageSize ? ' selected' : ''}>${s}</option>`; });
+  html += '</select>';
+  html += `<span style="font-size:.75rem;color:var(--muted)">共 ${total} 条 / ${totalPages} 页</span>`;
+  html += '</div>';
+  html += '<div style="display:flex;align-items:center;gap:.25rem;flex-wrap:wrap">';
+  html += `<button class="btn btn-sm btn-secondary" id="${containerId}_prev">上一页</button>`;
+  const startPage = Math.max(1, page - 2);
+  const endPage = Math.min(totalPages, page + 2);
+  for (let i = startPage; i <= endPage; i++) {
+    html += `<button class="btn btn-sm${i === page ? ' btn-primary' : ' btn-secondary'}" id="${containerId}_p${i}">${i}</button>`;
+  }
+  html += `<button class="btn btn-sm btn-secondary" id="${containerId}_next">下一页</button>`;
+  html += `<input type="number" id="${containerId}_jump" min="1" max="${totalPages}" value="${page}" style="width:3.5rem;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:.25rem;padding:.25rem .5rem;font-size:.75rem;text-align:center" placeholder="页码">`;
+  html += '</div>';
+  el.innerHTML = html;
+
+  // Attach events
+  document.getElementById(`${containerId}_size`).addEventListener('change', (e) => { onPageSizeChange(parseInt(e.target.value)); });
+  const prevBtn = document.getElementById(`${containerId}_prev`);
+  if (prevBtn) { prevBtn.disabled = page <= 1; prevBtn.addEventListener('click', () => onPageChange(page - 1)); }
+  const nextBtn = document.getElementById(`${containerId}_next`);
+  if (nextBtn) { nextBtn.disabled = page >= totalPages; nextBtn.addEventListener('click', () => onPageChange(page + 1)); }
+  for (let i = startPage; i <= endPage; i++) {
+    const btn = document.getElementById(`${containerId}_p${i}`);
+    if (btn) btn.addEventListener('click', () => onPageChange(i));
+  }
+  const jumpInput = document.getElementById(`${containerId}_jump`);
+  if (jumpInput) {
+    jumpInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { const v = parseInt(e.target.value); if (v >= 1 && v <= totalPages) onPageChange(v); }
+    });
+  }
+}
+
+async function clearUsage() {
+  if (!confirm('确定要清空所有 usage 记录吗？此操作不可恢复！')) return;
+  const res = await api('/api/usage/clear', { method: 'POST' });
+  const data = await res.json();
+  if (data.success) { toast('记录已清空'); loadUsage(); }
+  else alert('清空失败: ' + (data.error || '未知错误'));
+}
+async function mergeUsage() {
+  if (!confirm('确定要将当前 usage 记录归档并清空吗？')) return;
+  const res = await api('/api/usage/merge', { method: 'POST' });
+  const data = await res.json();
+  if (data.success) { toast('已归档: ' + (data.archive || '').split('\\').pop()); loadUsage(); }
+  else alert('归档失败: ' + (data.error || '未知错误'));
+}
+function exportUsageCsv() {
+  const token = localStorage.getItem('litellm_token');
+  const a = document.createElement('a');
+  a.href = '/api/usage/export?format=csv';
+  a.setAttribute('download', 'usage-export.csv');
+  if (token) a.href += '&token=' + encodeURIComponent(token);
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// ---------- Conversations ----------
+async function loadConversations(page, pageSize) {
+  if (page !== undefined) convPage = page;
+  if (pageSize !== undefined) convPageSize = pageSize;
+  const res = await api('/api/conversations');
+  const data = await res.json();
+  const statusEl = document.getElementById('convStorageStatus');
+  const listEl = document.getElementById('convListContainer');
+  if (!data.enabled) {
+    statusEl.textContent = '未启用';
+    statusEl.style.color = 'var(--danger)';
+    listEl.innerHTML = '<p style="color:var(--muted)">对话存储未启用或未配置保存目录。请在「系统设置」中配置。</p>';
+    document.getElementById('convPagination').innerHTML = '';
+    return;
+  }
+  statusEl.textContent = '已启用 | 目录: ' + data.directory;
+  statusEl.style.color = 'var(--success)';
+  const allEntries = data.entries || [];
+  if (allEntries.length === 0) {
+    listEl.innerHTML = '<p style="color:var(--muted)">暂无保存的对话记录。</p>';
+    document.getElementById('convPagination').innerHTML = '';
+    return;
+  }
+  const total = allEntries.length;
+  const totalPages = Math.max(1, Math.ceil(total / convPageSize));
+  convPage = Math.min(convPage, totalPages);
+  const offset = (convPage - 1) * convPageSize;
+  const pagedEntries = allEntries.slice(offset, offset + convPageSize);
+  let html = '<table><thead><tr><th>时间</th><th>模型</th><th>密钥</th><th>请求ID</th><th>操作</th></tr></thead><tbody>';
+  for (const e of pagedEntries) {
+    html += `<tr><td>${new Date(e.timestamp).toLocaleString()}</td><td>${e.model}</td><td>${e.key_name || 'master'}</td><td><span style="font-size:.7rem;color:var(--muted)">${e.request_id}</span></td><td><button class="btn btn-sm btn-secondary" onclick="openConvDetail('${e.filename}')">查看</button> <button class="btn btn-sm btn-danger" onclick="deleteConversation('${e.filename}')">删除</button></td></tr>`;
+  }
+  html += '</tbody></table>';
+  listEl.innerHTML = html;
+  const pg = { page: convPage, pageSize: convPageSize, total, totalPages };
+  renderPagination('convPagination', pg, (p) => loadConversations(p), (ps) => loadConversations(1, ps));
+}
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+function highlightJson(json) {
+  if (typeof json !== 'string') json = JSON.stringify(json, null, 2);
+  const container = document.createElement('div');
+  container.textContent = json;
+  _highlightJsonNode(container);
+  return container.innerHTML;
+}
+function _highlightJsonNode(node) {
+  if (node.nodeType !== Node.TEXT_NODE) {
+    Array.from(node.childNodes).forEach(_highlightJsonNode);
+    return;
+  }
+  const text = node.textContent;
+  const regex = /"(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"|\b(true|false|null)\b|\b\d+\.?\d*\b/g;
+  let lastIndex = 0, m;
+  const frag = document.createDocumentFragment();
+  while ((m = regex.exec(text)) !== null) {
+    if (m.index > lastIndex) {
+      frag.appendChild(document.createTextNode(text.slice(lastIndex, m.index)));
+    }
+    const val = m[0];
+    let cls = 'hljs-string';
+    if (val.startsWith('"')) {
+      const after = text.slice(regex.lastIndex);
+      cls = /^[ \t]*:/.test(after) ? 'hljs-key' : 'hljs-string';
+    } else if (/^\d+\.?\d*$/.test(val)) {
+      cls = 'hljs-number';
+    } else if (val === 'true' || val === 'false') {
+      cls = 'hljs-boolean';
+    } else if (val === 'null') {
+      cls = 'hljs-null';
+    }
+    const span = document.createElement('span');
+    span.className = cls;
+    span.textContent = val;
+    frag.appendChild(span);
+    lastIndex = regex.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    frag.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
+  if (frag.childNodes.length > 0) {
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+function setConvLayout(mode) {
+  document.querySelectorAll('.conv-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
+  document.querySelectorAll('.conv-layout').forEach(l => {
+    l.classList.toggle('active', l.dataset.mode === mode);
+  });
+  localStorage.setItem('conv_layout', mode);
+}
+async function copyToClipboard(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const orig = btn.textContent;
+    btn.textContent = '✓ 已复制';
+    setTimeout(() => btn.textContent = orig, 1500);
+  } catch(e) { alert('复制失败，请手动复制'); }
+}
+async function openConvDetail(filename) {
+  const res = await api(`/api/conversations/${encodeURIComponent(filename)}`);
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  document.getElementById('convDetailTitle').textContent = `对话详情 - ${data.model} - ${new Date(data.timestamp).toLocaleString()}`;
+  document.getElementById('convMetaInfo').innerHTML = `<strong>模型:</strong> ${escapeHtml(data.model)} | <strong>密钥:</strong> ${escapeHtml(data.key_name || 'master')} | <strong>UA:</strong> ${escapeHtml(data.user_agent || '-')} | <strong>请求ID:</strong> ${escapeHtml(data.request_id || '-')}`;
+  const inputRaw = JSON.stringify(data.input, null, 2);
+  const outputRaw = data.output ? JSON.stringify(data.output, null, 2) : (data.output_raw || '');
+  const inputHtml = highlightJson(inputRaw);
+  const outputHtml = outputRaw.trim().startsWith('{') || outputRaw.trim().startsWith('[') ? highlightJson(outputRaw) : escapeHtml(outputRaw);
+  const inputChars = inputRaw.length;
+  const outputChars = outputRaw.length;
+  const panel = (title, chars, content, raw, id) => `
+    <div class="conv-panel">
+      <div class="conv-panel-header">
+        <span class="conv-panel-title">${title}<span class="conv-panel-stat">${chars.toLocaleString()} 字符</span></span>
+        <button class="conv-copy-btn" onclick="copyToClipboard(this.dataset.text,this)" data-text="${escapeHtml(raw)}">复制</button>
+      </div>
+      <div class="conv-pre-wrap"><pre>${content}</pre></div>
+    </div>`;
+  const savedLayout = localStorage.getItem('conv_layout') || 'side';
+  document.getElementById('convDetailBody').innerHTML = `
+    <div class="conv-layout side ${savedLayout==='side'?'active':''}" data-mode="side">
+      ${panel('Input (请求)', inputChars, inputHtml, inputRaw, 'in')}
+      ${panel('Output (响应)', outputChars, outputHtml, outputRaw, 'out')}
+    </div>
+    <div class="conv-layout stack ${savedLayout==='stack'?'active':''}" data-mode="stack">
+      ${panel('Input (请求)', inputChars, inputHtml, inputRaw, 'in')}
+      ${panel('Output (响应)', outputChars, outputHtml, outputRaw, 'out')}
+    </div>
+    <div class="conv-layout single ${savedLayout==='input'?'active':''}" data-mode="input">
+      ${panel('Input (请求)', inputChars, inputHtml, inputRaw, 'in')}
+    </div>
+    <div class="conv-layout single ${savedLayout==='output'?'active':''}" data-mode="output">
+      ${panel('Output (响应)', outputChars, outputHtml, outputRaw, 'out')}
+    </div>
+  `;
+  setConvLayout(savedLayout);
+  document.getElementById('convDetailModal').classList.add('active');
+}
+function closeConvDetail() {
+  document.getElementById('convDetailModal').classList.remove('active');
+}
+async function deleteConversation(filename) {
+  if (!confirm('确定删除此对话记录？')) return;
+  const res = await api(`/api/conversations/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (data.success) { toast('已删除'); loadConversations(); }
+  else alert('删除失败: ' + (data.error || '未知错误'));
+}
+
+// ---------- Connections ----------
+async function loadConnections(page, pageSize) {
+  if (page !== undefined) connPage = page;
+  if (pageSize !== undefined) connPageSize = pageSize;
+  const res = await api('/api/connections');
+  const data = await res.json();
+  document.getElementById('connCountBadge').textContent = data.count;
+  const listEl = document.getElementById('connListContainer');
+  const allEntries = data.entries || [];
+  if (allEntries.length === 0) {
+    listEl.innerHTML = '<p style="color:var(--muted)">暂无活跃连接。</p>';
+    document.getElementById('connPagination').innerHTML = '';
+    return;
+  }
+  const total = allEntries.length;
+  const totalPages = Math.max(1, Math.ceil(total / connPageSize));
+  connPage = Math.min(connPage, totalPages);
+  const offset = (connPage - 1) * connPageSize;
+  const pagedEntries = allEntries.slice(offset, offset + connPageSize);
+  let html = '<table><thead><tr><th>请求ID</th><th>模型</th><th>密钥</th><th>UA</th><th>类型</th><th>已耗时</th><th>操作</th></tr></thead><tbody>';
+  for (const c of pagedEntries) {
+    const uaShort = (c.userAgent || '-').length > 40 ? (c.userAgent.slice(0, 40) + '...') : (c.userAgent || '-');
+    html += `<tr><td><span style="font-size:.7rem;color:var(--muted)">${c.requestId}</span></td><td>${c.model}</td><td>${c.keyName || 'master'}</td><td title="${(c.userAgent || '').replace(/"/g, '&quot;')}"><span style="font-size:.75rem;color:var(--muted)">${escapeHtml(uaShort)}</span></td><td>${c.stream ? 'Stream' : 'Sync'}</td><td>${c.elapsedMs}ms</td><td><button class="btn btn-sm btn-danger" onclick="abortConnection('${c.requestId}')">中断</button></td></tr>`;
+  }
+  html += '</tbody></table>';
+  listEl.innerHTML = html;
+  const pg = { page: connPage, pageSize: connPageSize, total, totalPages };
+  renderPagination('connPagination', pg, (p) => loadConnections(p), (ps) => loadConnections(1, ps));
+}
+async function abortConnection(requestId) {
+  if (!confirm('确定要中断此连接？')) return;
+  const res = await api(`/api/connections/${encodeURIComponent(requestId)}/abort`, { method: 'POST' });
+  const data = await res.json();
+  if (data.success) { toast('已发送中断信号'); loadConnections(); }
+  else alert('中断失败: ' + (data.error || '未知错误'));
+}
+
+// ---------- Settings ----------
+async function changePassword() {
+  const oldPwd = document.getElementById('oldPwd').value;
+  const newPwd = document.getElementById('newPwd').value;
+  const newPwd2 = document.getElementById('newPwd2').value;
+  if (!oldPwd || !newPwd) { alert('请填写完整'); return; }
+  if (newPwd !== newPwd2) { alert('两次新密码不一致'); return; }
+  const res = await api('/api/change-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ oldPassword: oldPwd, newPassword: newPwd }) });
+  const data = await res.json();
+  if (data.success) { toast('密码已修改'); document.getElementById('oldPwd').value = ''; document.getElementById('newPwd').value = ''; document.getElementById('newPwd2').value = ''; }
+  else alert(data.error || '修改失败');
+}
+async function saveConversationStorage() {
+  const enabled = document.getElementById('convEnabled').checked;
+  const directory = document.getElementById('convDirectory').value.trim();
+  const res = await api('/api/conversation-storage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, directory }) });
+  const data = await res.json();
+  if (data.success) { toast('对话存储配置已保存'); config.conversation_storage = data.conversation_storage; }
+  else alert('保存失败: ' + (data.error || '未知错误'));
+}
+function logout() { localStorage.removeItem('litellm_token'); window.location.href = '/login.html'; }
+function toast(msg) { const el = document.getElementById('toast'); el.textContent = msg; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2000); }
+load();
+</script>
+</body>
+</html>
