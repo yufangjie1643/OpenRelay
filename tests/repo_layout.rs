@@ -31,3 +31,22 @@ fn frontend_static_assets_do_not_depend_on_node_modules() {
     assert!(!index.contains("/vendor/js-yaml"));
     assert!(!index.contains("cdnjs.cloudflare.com"));
 }
+
+#[test]
+fn frontend_shows_protocol_specific_proxy_endpoints_and_stable_model_picker() {
+    let index = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("public")
+            .join("index.html"),
+    )
+    .unwrap();
+
+    assert!(index.contains("OpenAI 兼容接口"));
+    assert!(index.contains("Gemini 原生接口"));
+    assert!(index.contains("/gemini/v1beta/models/{model}:generateContent"));
+    assert!(index.contains("/gemini/v1beta/models/{model}:streamGenerateContent"));
+    assert!(index.contains("model-test-result"));
+    assert!(index.contains("fetched-model-list"));
+    assert!(index.contains("fetched-model-row"));
+    assert!(index.contains("overflow-wrap:anywhere"));
+}

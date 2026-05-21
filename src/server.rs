@@ -5,9 +5,10 @@ use crate::database::{Database, DatabaseError, UsageLog};
 use crate::migration::{migrate_legacy_data, MigrationError};
 use crate::paths::{data_root_from_env, static_root_from_env, AppPaths};
 use crate::proxy::{
-    build_models_response, build_upstream_url, calc_cost, check_virtual_key, estimate_tokens,
-    extract_usage_tokens, get_request_model, is_models_endpoint, resolve_provider,
-    rewrite_json_model,
+    build_gemini_models_response, build_gemini_upstream_url, build_models_response,
+    build_upstream_url, calc_cost, check_virtual_key, estimate_tokens, extract_usage_tokens,
+    get_request_model, is_gemini_models_endpoint, is_models_endpoint, resolve_provider,
+    rewrite_json_model, KeyCheck,
 };
 use axum::body::{to_bytes, Body};
 use axum::extract::{Path as AxumPath, State};
@@ -168,6 +169,8 @@ pub fn build_router(state: ServerState) -> Router {
         )
         .route("/api/connections", get(get_connections))
         .route("/api/connections/:id/abort", post(abort_connection))
+        .route("/gemini/*path", any(proxy_handler))
+        .route("/proxy/gemini/*path", any(proxy_handler))
         .route("/v1/*path", any(proxy_handler))
         .route("/proxy/*path", any(proxy_handler))
         .route("/chat/completions", any(proxy_handler))
@@ -461,24 +464,34 @@ async fn test_provider(
     require_admin(&state, &headers)?;
     let api_key = resolve_api_key(&payload.api_key);
     let base_url = provider_base_url(&payload.provider_type, &payload.base_url);
-    let url = crate::proxy::build_upstream_url(&base_url, "/v1/models", "").map_err(|e| {
-        ConfigError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            e.to_string(),
-        ))
-    })?;
-    let response = state
-        .client
-        .get(url)
-        .header(header::AUTHORIZATION, format!("Bearer {api_key}"))
-        .header(
-            header::USER_AGENT,
-            payload
-                .user_agent
-                .unwrap_or_else(|| "OpenRelay-Gateway/1.0".to_string()),
-        )
-        .send()
-        .await;
+    let is_gemini = payload.provider_type == "gemini";
+    let url = if is_gemini {
+        build_gemini_upstream_url(&base_url, "/v1beta/models", "", "").map_err(|e| {
+            ConfigError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                e.to_string(),
+            ))
+        })?
+    } else {
+        crate::proxy::build_upstream_url(&base_url, "/v1/models", "").map_err(|e| {
+            ConfigError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                e.to_string(),
+            ))
+        })?
+    };
+    let mut request = state.client.get(url).header(
+        header::USER_AGENT,
+        payload
+            .user_agent
+            .unwrap_or_else(|| "OpenRelay-Gateway/1.0".to_string()),
+    );
+    request = if is_gemini {
+        request.header("x-goog-api-key", api_key)
+    } else {
+        request.header(header::AUTHORIZATION, format!("Bearer {api_key}"))
+    };
+    let response = request.send().await;
     let Ok(response) = response else {
         return Ok(Json(json!({ "success": false, "error": "连接失败" })).into_response());
     };
@@ -489,11 +502,41 @@ async fn test_provider(
             Json(json!({ "success": false, "error": format!("HTTP {status}") })).into_response(),
         );
     }
-    let models = value
-        .get("data")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let models = if is_gemini {
+        value
+            .get("models")
+            .and_then(Value::as_array)
+            .map(|models| {
+                models
+                    .iter()
+                    .map(|model| {
+                        let name = model
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .strip_prefix("models/")
+                            .unwrap_or_else(|| {
+                                model
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                            });
+                        json!({
+                            "id": name,
+                            "owned_by": "google",
+                            "object": "model"
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        value
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
     Ok(Json(json!({ "success": true, "models": models })).into_response())
 }
 
@@ -610,6 +653,108 @@ async fn abort_connection() -> Json<Value> {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProxyProtocol {
+    OpenAi,
+    Gemini,
+}
+
+fn split_proxy_protocol(target: &str) -> (ProxyProtocol, &str) {
+    if let Some(rest) = target.strip_prefix("/gemini") {
+        let rest = if rest.is_empty() { "/" } else { rest };
+        return (ProxyProtocol::Gemini, rest);
+    }
+    (ProxyProtocol::OpenAi, target)
+}
+
+fn client_key_for_protocol(
+    protocol: ProxyProtocol,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> Option<String> {
+    bearer_token(headers).or_else(|| match protocol {
+        ProxyProtocol::OpenAi => None,
+        ProxyProtocol::Gemini => headers
+            .get("x-goog-api-key")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+            .or_else(|| query_key(query)),
+    })
+}
+
+fn query_key(query: Option<&str>) -> Option<String> {
+    query.and_then(|query| {
+        url::form_urlencoded::parse(query.as_bytes())
+            .find(|(key, value)| key == "key" && !value.trim().is_empty())
+            .map(|(_, value)| value.into_owned())
+    })
+}
+
+fn check_request_limits(
+    state: &ServerState,
+    cfg: &AppConfig,
+    model: &str,
+    key_name: &str,
+    key_check: &KeyCheck,
+) -> Result<Option<String>, ServerError> {
+    let since = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+
+    if let Some(rpm) = key_check.virtual_key.as_ref().and_then(|key| key.rpm) {
+        if state
+            .database
+            .request_count_since(&since, Some(key_name), None)?
+            >= rpm as u64
+        {
+            return Ok(Some(format!("密钥 \"{key_name}\" 已达到 RPM 限额 {rpm}")));
+        }
+    }
+    if let Some(budget) = key_check.virtual_key.as_ref().and_then(|key| key.budget) {
+        if state.database.total_cost(Some(key_name), None)? >= budget {
+            return Ok(Some(format!("密钥 \"{key_name}\" 已达到预算限额 {budget}")));
+        }
+    }
+
+    if let Some(rpm) = limit_u64(cfg.limits.get("global"), "rpm") {
+        if state.database.request_count_since(&since, None, None)? >= rpm {
+            return Ok(Some(format!("全局 RPM 已达到限额 {rpm}")));
+        }
+    }
+    if let Some(budget) = limit_f64(cfg.limits.get("global"), "budget") {
+        if state.database.total_cost(None, None)? >= budget {
+            return Ok(Some(format!("全局预算已达到限额 {budget}")));
+        }
+    }
+    if let Some(rpm) = limit_u64(cfg.limits.get(model), "rpm") {
+        if state
+            .database
+            .request_count_since(&since, None, Some(model))?
+            >= rpm
+        {
+            return Ok(Some(format!("模型 {model} 已达到 RPM 限额 {rpm}")));
+        }
+    }
+    if let Some(budget) = limit_f64(cfg.limits.get(model), "budget") {
+        if state.database.total_cost(None, Some(model))? >= budget {
+            return Ok(Some(format!("模型 {model} 已达到预算限额 {budget}")));
+        }
+    }
+    Ok(None)
+}
+
+fn limit_u64(value: Option<&Value>, field: &str) -> Option<u64> {
+    value
+        .and_then(|value| value.get(field))
+        .and_then(|value| value.as_u64().or_else(|| value.as_f64().map(|v| v as u64)))
+        .filter(|value| *value > 0)
+}
+
+fn limit_f64(value: Option<&Value>, field: &str) -> Option<f64> {
+    value
+        .and_then(|value| value.get(field))
+        .and_then(Value::as_f64)
+        .filter(|value| *value > 0.0)
+}
+
 async fn proxy_handler(
     State(state): State<ServerState>,
     method: Method,
@@ -624,6 +769,7 @@ async fn proxy_handler(
         .map(|pq| pq.as_str())
         .unwrap_or(uri.path());
     let target = raw_path.strip_prefix("/proxy").unwrap_or(raw_path);
+    let (protocol, target) = split_proxy_protocol(target);
     let target_path = target.split('?').next().unwrap_or(target);
     let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
     let content_type = headers
@@ -639,9 +785,12 @@ async fn proxy_handler(
     } else {
         json!({})
     };
-    let models_endpoint = is_models_endpoint(target_path);
+    let models_endpoint = match protocol {
+        ProxyProtocol::OpenAi => is_models_endpoint(target_path),
+        ProxyProtocol::Gemini => is_gemini_models_endpoint(target_path),
+    };
     let request_model = get_request_model(&json_body, target_path);
-    let auth_key = bearer_token(&headers).unwrap_or_default();
+    let auth_key = client_key_for_protocol(protocol, &headers, uri.query()).unwrap_or_default();
     let key_check = check_virtual_key(
         &cfg,
         &auth_key,
@@ -662,7 +811,12 @@ async fn proxy_handler(
             .virtual_key
             .as_ref()
             .and_then(|k| k.allowed_models.as_deref());
-        return Ok(Json(build_models_response(&cfg, allowed)).into_response());
+        return Ok(match protocol {
+            ProxyProtocol::OpenAi => Json(build_models_response(&cfg, allowed)).into_response(),
+            ProxyProtocol::Gemini => {
+                Json(build_gemini_models_response(&cfg, allowed)).into_response()
+            }
+        });
     }
 
     let Some(model) = request_model else {
@@ -682,6 +836,9 @@ async fn proxy_handler(
             }
         })
         .unwrap_or_else(|| "master".to_string());
+    if let Some(message) = check_request_limits(&state, &cfg, &model, &key_name, &key_check)? {
+        return Ok(limit_error(message));
+    }
     let request_id = Uuid::new_v4().to_string();
     let user_agent = headers
         .get(header::USER_AGENT)
@@ -698,25 +855,27 @@ async fn proxy_handler(
             Json(json!({ "error": { "message": format!("未知模型: {model}"), "type": "invalid_request_error", "code": 400 } })),
         ).into_response());
     };
-    let upstream_url =
-        build_upstream_url(&provider.base_url, target_path, &query).map_err(|e| {
-            ConfigError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                e.to_string(),
-            ))
-        })?;
-    let upstream_body = if content_type.contains("json") {
-        rewrite_json_model(json_body.clone(), &provider.model_id)
-    } else {
-        raw_body.to_vec()
+    let upstream_url = match protocol {
+        ProxyProtocol::OpenAi => build_upstream_url(&provider.base_url, target_path, &query),
+        ProxyProtocol::Gemini => {
+            build_gemini_upstream_url(&provider.base_url, target_path, &query, &provider.model_id)
+        }
+    }
+    .map_err(|e| {
+        ConfigError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            e.to_string(),
+        ))
+    })?;
+    let upstream_body = match protocol {
+        ProxyProtocol::OpenAi if content_type.contains("json") => {
+            rewrite_json_model(json_body.clone(), &provider.model_id)
+        }
+        _ => raw_body.to_vec(),
     };
     let mut req = state
         .client
         .request(method.clone(), upstream_url)
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {}", provider.api_key),
-        )
         .header(header::CONTENT_TYPE, content_type)
         .header(
             header::ACCEPT,
@@ -725,6 +884,13 @@ async fn proxy_handler(
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("application/json"),
         );
+    req = match protocol {
+        ProxyProtocol::OpenAi => req.header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", provider.api_key),
+        ),
+        ProxyProtocol::Gemini => req.header("x-goog-api-key", provider.api_key.clone()),
+    };
     if let Some(ua) = provider.user_agent {
         req = req.header(header::USER_AGENT, ua);
     }

@@ -2,7 +2,7 @@ use crate::config::{AppConfig, ProviderConfig, VirtualKeyConfig};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use url::Url;
+use url::{form_urlencoded, Url};
 
 const MINIMAX_NATIVE_MODELS: &[&str] = &[
     "MiniMax-M2.7",
@@ -104,8 +104,67 @@ pub fn build_upstream_url(
     Ok(base.to_string())
 }
 
+pub fn build_gemini_upstream_url(
+    base_url: &str,
+    target_path: &str,
+    query: &str,
+    upstream_model: &str,
+) -> Result<String, ProxyHelperError> {
+    let mut base = Url::parse(base_url.trim_end_matches('/'))?;
+    let base_path = base.path().trim_end_matches('/').to_string();
+    let mut target = target_path
+        .split('?')
+        .next()
+        .unwrap_or(target_path)
+        .to_string();
+    if !target.starts_with('/') {
+        target.insert(0, '/');
+    }
+    if is_gemini_versioned_base_path(&base_path) {
+        target = target
+            .strip_prefix("/v1beta")
+            .or_else(|| target.strip_prefix("/v1"))
+            .filter(|s| !s.is_empty())
+            .unwrap_or(target.as_str())
+            .to_string();
+        if !target.starts_with('/') {
+            target.insert(0, '/');
+        }
+    }
+    target = rewrite_gemini_model_segment(&target, upstream_model);
+    let joined = format!("{base_path}{target}");
+    base.set_path(&joined.replace("//", "/"));
+
+    let mut query_pairs: Vec<(String, String)> =
+        form_urlencoded::parse(query.trim_start_matches('?').as_bytes())
+            .filter(|(key, _)| key != "key")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+    if target.contains(":streamGenerateContent") && !query_pairs.iter().any(|(key, _)| key == "alt")
+    {
+        query_pairs.push(("alt".to_string(), "sse".to_string()));
+    }
+    let query = form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(
+            query_pairs
+                .iter()
+                .map(|(key, value)| (&key[..], &value[..])),
+        )
+        .finish();
+    if query.is_empty() {
+        base.set_query(None);
+    } else {
+        base.set_query(Some(&query));
+    }
+    Ok(base.to_string())
+}
+
 fn is_versioned_base_path(path: &str) -> bool {
     path == "/v1" || path.ends_with("/v1")
+}
+
+fn is_gemini_versioned_base_path(path: &str) -> bool {
+    path == "/v1beta" || path.ends_with("/v1beta") || path == "/v1" || path.ends_with("/v1")
 }
 
 pub fn get_request_model(body: &Value, target_path: &str) -> Option<String> {
@@ -115,6 +174,9 @@ pub fn get_request_model(body: &Value, target_path: &str) -> Option<String> {
         }
     }
     let path = target_path.split('?').next().unwrap_or(target_path);
+    if let Some(model) = gemini_model_from_path(path) {
+        return Some(model);
+    }
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     match parts.as_slice() {
         ["v1", "models", model] | ["models", model] => Some((*model).to_string()),
@@ -127,6 +189,11 @@ pub fn is_models_endpoint(target_path: &str) -> bool {
     matches!(path, "/v1/models" | "/models")
         || path.starts_with("/v1/models/")
         || path.starts_with("/models/")
+}
+
+pub fn is_gemini_models_endpoint(target_path: &str) -> bool {
+    let path = target_path.split('?').next().unwrap_or(target_path);
+    matches!(path, "/v1beta/models" | "/v1/models" | "/models")
 }
 
 pub fn resolve_provider(model: &str, cfg: &AppConfig) -> Option<ResolvedProvider> {
@@ -162,10 +229,21 @@ fn to_resolved(provider: &ProviderConfig, model_id: &str) -> ResolvedProvider {
     ResolvedProvider {
         name: provider.name.clone(),
         provider_type: provider.provider_type.clone(),
-        base_url: provider.base_url.clone().unwrap_or_default(),
+        base_url: provider
+            .base_url
+            .clone()
+            .unwrap_or_else(|| default_provider_base_url(&provider.provider_type)),
         api_key: provider.api_key.clone(),
         user_agent: provider.user_agent.clone(),
         model_id: model_id.to_string(),
+    }
+}
+
+fn default_provider_base_url(provider_type: &str) -> String {
+    match provider_type {
+        "anthropic" => "https://api.anthropic.com/v1".to_string(),
+        "gemini" => "https://generativelanguage.googleapis.com/v1beta".to_string(),
+        _ => "https://api.openai.com/v1".to_string(),
     }
 }
 
@@ -191,6 +269,32 @@ pub fn build_models_response(cfg: &AppConfig, allowed_models: Option<&[String]>)
         })
         .collect();
     json!({ "object": "list", "data": data })
+}
+
+pub fn build_gemini_models_response(cfg: &AppConfig, allowed_models: Option<&[String]>) -> Value {
+    let models: Vec<Value> = cfg
+        .providers
+        .iter()
+        .filter(|provider| provider.provider_type == "gemini")
+        .flat_map(|provider| {
+            provider.models.iter().filter_map(move |model| {
+                if allowed_models
+                    .map(|allowed| !allowed.iter().any(|m| m == &model.model_name))
+                    .unwrap_or(false)
+                {
+                    return None;
+                }
+                Some(json!({
+                    "name": format!("models/{}", model.model_name),
+                    "baseModelId": if model.model_id.is_empty() { &model.model_name } else { &model.model_id },
+                    "version": "openrelay",
+                    "displayName": model.model_name,
+                    "supportedGenerationMethods": ["generateContent", "streamGenerateContent"]
+                }))
+            })
+        })
+        .collect();
+    json!({ "models": models })
 }
 
 pub fn estimate_tokens(body: &Value) -> u64 {
@@ -219,6 +323,27 @@ pub fn estimate_tokens(body: &Value) -> u64 {
 }
 
 pub fn extract_usage_tokens(data: &Value, fallback_input: u64) -> UsageTokens {
+    if let Some(usage) = data.get("usageMetadata") {
+        let prompt = first_u64(&[
+            usage.pointer("/promptTokenCount"),
+            usage.pointer("/totalTokenCount"),
+        ])
+        .unwrap_or(fallback_input);
+        let completion =
+            first_u64(&[usage.pointer("/candidatesTokenCount")]).unwrap_or_else(|| {
+                usage
+                    .pointer("/totalTokenCount")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(prompt)
+                    .saturating_sub(prompt)
+            });
+        return UsageTokens {
+            input_tokens: prompt,
+            output_tokens: completion,
+            cached_tokens: 0,
+            cached_write_tokens: 0,
+        };
+    }
     let Some(usage) = data.get("usage") else {
         return UsageTokens {
             input_tokens: fallback_input,
@@ -357,4 +482,33 @@ pub fn rewrite_json_model(mut body: Value, upstream_model: &str) -> Vec<u8> {
         body["model"] = json!(upstream_model);
     }
     serde_json::to_vec(&body).unwrap_or_default()
+}
+
+fn gemini_model_from_path(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
+    let segment = match parts.as_slice() {
+        ["v1beta", "models", model] | ["v1", "models", model] | ["models", model] => *model,
+        _ => return None,
+    };
+    let model = segment.split(':').next().unwrap_or(segment).trim();
+    if model.is_empty() {
+        None
+    } else {
+        Some(model.to_string())
+    }
+}
+
+fn rewrite_gemini_model_segment(path: &str, upstream_model: &str) -> String {
+    let mut parts: Vec<String> = path.split('/').map(str::to_string).collect();
+    for index in 0..parts.len().saturating_sub(1) {
+        if parts[index] == "models" {
+            let method_suffix = parts[index + 1]
+                .find(':')
+                .map(|pos| parts[index + 1][pos..].to_string())
+                .unwrap_or_default();
+            parts[index + 1] = format!("{upstream_model}{method_suffix}");
+            return parts.join("/");
+        }
+    }
+    path.to_string()
 }

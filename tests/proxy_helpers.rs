@@ -1,7 +1,7 @@
 use openrelay::config::{AppConfig, ModelConfig, ProviderConfig, VirtualKeyConfig};
 use openrelay::proxy::{
-    build_models_response, build_upstream_url, calc_cost, extract_usage_tokens, get_request_model,
-    resolve_provider,
+    build_gemini_upstream_url, build_models_response, build_upstream_url, calc_cost,
+    extract_usage_tokens, get_request_model, resolve_provider,
 };
 use serde_json::json;
 
@@ -74,6 +74,40 @@ fn request_model_reads_body_and_model_path() {
 }
 
 #[test]
+fn gemini_model_is_read_from_native_model_path() {
+    assert_eq!(
+        get_request_model(
+            &json!({"contents": [{"parts": [{"text": "hello"}]}]}),
+            "/v1beta/models/gemini-local:generateContent"
+        ),
+        Some("gemini-local".to_string())
+    );
+    assert_eq!(
+        get_request_model(
+            &json!({}),
+            "/v1beta/models/gemini-local:streamGenerateContent"
+        ),
+        Some("gemini-local".to_string())
+    );
+}
+
+#[test]
+fn gemini_upstream_url_rewrites_model_and_removes_client_key() {
+    let url = build_gemini_upstream_url(
+        "https://generativelanguage.googleapis.com/v1beta",
+        "/v1beta/models/gemini-local:streamGenerateContent",
+        "?key=client-key&alt=sse",
+        "gemini-1.5-pro",
+    )
+    .unwrap();
+
+    assert_eq!(
+        url,
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent?alt=sse"
+    );
+}
+
+#[test]
 fn resolves_configured_and_minimax_native_models() {
     let cfg = sample_config();
     let local = resolve_provider("local-gpt", &cfg).unwrap();
@@ -111,6 +145,18 @@ fn extracts_openai_and_responses_usage() {
     assert_eq!(responses.input_tokens, 13);
     assert_eq!(responses.output_tokens, 8);
     assert_eq!(responses.cached_tokens, 3);
+}
+
+#[test]
+fn extracts_gemini_usage_metadata() {
+    let gemini = extract_usage_tokens(
+        &json!({"usageMetadata": {"promptTokenCount": 23, "candidatesTokenCount": 11, "totalTokenCount": 34}}),
+        5,
+    );
+
+    assert_eq!(gemini.input_tokens, 23);
+    assert_eq!(gemini.output_tokens, 11);
+    assert_eq!(gemini.cached_tokens, 0);
 }
 
 #[test]

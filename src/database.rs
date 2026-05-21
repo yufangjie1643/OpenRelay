@@ -164,6 +164,42 @@ impl Database {
         Ok(())
     }
 
+    pub fn request_count_since(
+        &self,
+        since: &str,
+        key_name: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<u64, DatabaseError> {
+        let conn = self.lock_conn()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM usage_logs
+             WHERE timestamp >= ?1
+               AND (?2 IS NULL OR key_name = ?2)
+               AND (?3 IS NULL OR model = ?3)",
+            params![since, key_name, model],
+            |row| row.get(0),
+        )?;
+        Ok(count.max(0) as u64)
+    }
+
+    pub fn total_cost(
+        &self,
+        key_name: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<f64, DatabaseError> {
+        let conn = self.lock_conn()?;
+        let cost: f64 = conn.query_row(
+            "SELECT COALESCE(SUM(cost), 0)
+             FROM usage_logs
+             WHERE (?1 IS NULL OR key_name = ?1)
+               AND (?2 IS NULL OR model = ?2)",
+            params![key_name, model],
+            |row| row.get(0),
+        )?;
+        Ok(cost)
+    }
+
     pub fn export_usage_csv(&self) -> Result<String, DatabaseError> {
         let conn = self.lock_conn()?;
         let mut out = String::from(

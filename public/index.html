@@ -58,6 +58,21 @@
   .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
   .empty{text-align:center;padding:2rem;color:var(--muted)}
   .yaml-preview{background:var(--input);border:1px solid var(--border);border-radius:6px;padding:1rem;font-family:"Cascadia Code","SF Mono",Consolas,monospace;font-size:.8125rem;overflow:auto;max-height:400px;white-space:pre-wrap;color:var(--text)}
+  .endpoint-groups{display:grid;grid-template-columns:1fr;gap:.85rem}
+  .endpoint-group{border:1px solid var(--border);border-radius:8px;background:var(--input);padding:.85rem}
+  .endpoint-title{font-size:.78rem;font-weight:800;color:var(--accent);margin-bottom:.45rem}
+  .endpoint-list{display:grid;gap:.45rem}
+  .endpoint-list code{display:block;font-family:"Cascadia Code","SF Mono",Consolas,monospace;font-size:.78rem;color:var(--text);white-space:normal;overflow-wrap:anywhere;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:6px;padding:.55rem .65rem}
+  .model-test-result{margin-top:.55rem;font-size:.875rem;min-height:1.35rem}
+  .fetched-model-panel{display:none;margin-bottom:1rem}
+  .fetched-model-heading{font-size:.875rem;font-weight:700;margin-bottom:.5rem;color:var(--text)}
+  .fetched-model-list{max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:.4rem;background:var(--input);display:grid;gap:.3rem}
+  .fetched-model-row{display:grid;grid-template-columns:20px minmax(0,1fr);gap:.55rem;align-items:start;padding:.5rem;border:1px solid transparent;border-radius:6px;cursor:pointer;font-size:.875rem}
+  .fetched-model-row:hover{background:var(--card-2);border-color:var(--border)}
+  .fetched-model-row input{width:16px;height:16px;margin-top:.15rem}
+  .fetched-model-id{min-width:0;font-weight:750;overflow-wrap:anywhere;line-height:1.35}
+  .fetched-model-owner{display:block;color:var(--muted);font-size:.74rem;margin-top:.12rem;overflow-wrap:anywhere}
+  .fetched-model-actions{margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap}
   .toast{position:fixed;bottom:1.5rem;right:1.5rem;padding:.75rem 1.25rem;border-radius:8px;background:var(--ok);color:#062016;font-weight:700;box-shadow:var(--shadow);opacity:0;transform:translateY(1rem);transition:all .3s;pointer-events:none;z-index:100}
   .toast.show{opacity:1;transform:translateY(0)}
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
@@ -183,7 +198,7 @@
   .theme-preview{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-top:.7rem}
   .theme-swatch{height:34px;border-radius:6px;border:1px solid var(--border);background:linear-gradient(135deg,var(--card) 0 34%,var(--card-2) 34% 67%,var(--accent) 67% 100%)}
   @media(max-width:1100px){.conv-layout.side.active{display:flex;flex-direction:column;height:auto}.conv-layout.side .conv-panel{height:auto;min-height:420px}.conv-box{width:98%;padding:1rem}.conv-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.conv-reader-shell{grid-template-columns:1fr}.conv-outline{position:relative;max-height:none;order:-1}}
-  @media(max-width:720px){header{padding:.85rem 1rem;align-items:flex-start;gap:.75rem;flex-direction:column}.container{padding:1rem}.actions{justify-content:flex-start;flex-wrap:wrap}.path-control{grid-template-columns:1fr}.path-control .btn{justify-content:center}.provider-header{align-items:flex-start;gap:.75rem;flex-direction:column}.limit-row,.vk-row{grid-template-columns:1fr}.vk-row.header,.limit-row.header{display:none}.conv-summary{grid-template-columns:1fr}.conv-flow{grid-template-columns:1fr}.conv-flow-label.right{text-align:left}.conv-doc{padding:1.2rem}.md-body{font-size:.95rem}}
+  @media(max-width:720px){header{padding:.85rem 1rem;align-items:flex-start;gap:.75rem;flex-direction:column}.container{padding:1rem}.actions{justify-content:flex-start;flex-wrap:wrap}.path-control{grid-template-columns:1fr}.path-control .btn{justify-content:center}.provider-header{align-items:flex-start;gap:.75rem;flex-direction:column}.limit-row,.vk-row{grid-template-columns:1fr}.vk-row.header,.limit-row.header{display:none}.conv-summary{grid-template-columns:1fr}.conv-flow{grid-template-columns:1fr}.conv-flow-label.right{text-align:left}.conv-doc{padding:1.2rem}.md-body{font-size:.95rem}.modal-content{width:96%;padding:1rem}.fetched-model-list{max-height:260px}}
 </style>
 </head>
 <body>
@@ -400,9 +415,24 @@
       <div class="card">
         <h2>代理端点</h2>
         <p style="color:var(--muted);font-size:.875rem;margin-bottom:.75rem">统一代理服务，带用量统计 + 限额 + 密钥校验：</p>
-        <div class="yaml-preview">http://localhost:18783/proxy/v1/chat/completions</div>
-        <p style="color:var(--muted);font-size:.875rem;margin-top:.75rem">兼容无 /proxy 前缀：</p>
-        <div class="yaml-preview">http://localhost:18783/v1/chat/completions</div>
+        <div class="endpoint-groups">
+          <div class="endpoint-group">
+            <div class="endpoint-title">OpenAI 兼容接口</div>
+            <div class="endpoint-list">
+              <code>http://localhost:18783/v1/chat/completions</code>
+              <code>http://localhost:18783/v1/responses</code>
+              <code>http://localhost:18783/proxy/v1/chat/completions</code>
+            </div>
+          </div>
+          <div class="endpoint-group">
+            <div class="endpoint-title">Gemini 原生接口</div>
+            <div class="endpoint-list">
+              <code>http://localhost:18783/gemini/v1beta/models/{model}:generateContent</code>
+              <code>http://localhost:18783/gemini/v1beta/models/{model}:streamGenerateContent</code>
+              <code>http://localhost:18783/proxy/gemini/v1beta/models/{model}:generateContent</code>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -433,12 +463,12 @@
     </div>
     <div class="form-group">
       <button class="btn btn-warn" id="testProviderBtn" onclick="testProvider()">测试连通性并获取模型</button>
-      <div id="testResult" style="margin-top:.5rem;font-size:.875rem"></div>
+      <div id="testResult" class="model-test-result"></div>
     </div>
-    <div id="fetchedModels" style="display:none;margin-bottom:1rem">
-      <div style="font-size:.875rem;font-weight:600;margin-bottom:.5rem">获取到的模型（勾选要添加的）</div>
-      <div id="fetchedModelsList" style="max-height:200px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:.5rem;background:var(--input)"></div>
-      <div style="margin-top:.5rem;display:flex;gap:.5rem">
+    <div id="fetchedModels" class="fetched-model-panel">
+      <div class="fetched-model-heading">获取到的模型（勾选要添加的）</div>
+      <div id="fetchedModelsList" class="fetched-model-list"></div>
+      <div class="fetched-model-actions">
         <button class="btn btn-sm" onclick="selectAllFetched(true)">全选</button>
         <button class="btn btn-sm" onclick="selectAllFetched(false)">全不选</button>
       </div>
@@ -739,8 +769,8 @@ function renderFetchedModels(models) {
   if (!models.length) { container.innerHTML = '<div style="color:var(--muted)">未获取到模型列表</div>'; return; }
   models.forEach(m => {
     const div = document.createElement('label');
-    div.style.cssText = 'display:flex;align-items:center;gap:.5rem;padding:.25rem 0;cursor:pointer;font-size:.875rem';
-    div.innerHTML = `<input type="checkbox" class="fetched-model-cb" value="${escapeAttr(m.id)}" checked> <span><strong>${escapeHtml(m.id)}</strong> <span style="color:var(--muted);font-size:.75rem">${escapeHtml(m.owned_by || '')}</span></span>`;
+    div.className = 'fetched-model-row';
+    div.innerHTML = `<input type="checkbox" class="fetched-model-cb" value="${escapeAttr(m.id)}" checked><span class="fetched-model-copy"><span class="fetched-model-id">${escapeHtml(m.id)}</span><span class="fetched-model-owner">${escapeHtml(m.owned_by || '')}</span></span>`;
     container.appendChild(div);
   });
 }

@@ -1,10 +1,24 @@
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use openrelay::config::{save_config, AppConfig, ModelConfig, ProviderConfig};
+use axum::extract::State;
+use axum::http::{HeaderMap, Request, StatusCode, Uri};
+use axum::response::IntoResponse;
+use axum::routing::any;
+use axum::{Json, Router};
+use chrono::Utc;
+use openrelay::config::{save_config, AppConfig, ModelConfig, ProviderConfig, VirtualKeyConfig};
 use openrelay::database::{Database, UsageLog};
 use openrelay::server::{build_router, ServerState};
 use serde_json::json;
+use tokio::net::TcpListener;
+use tokio::sync::{mpsc, oneshot};
 use tower::ServiceExt;
+
+#[derive(Debug)]
+struct CapturedRequest {
+    path_and_query: String,
+    authorization: Option<String>,
+    google_key: Option<String>,
+}
 
 #[tokio::test]
 async fn models_endpoint_returns_configured_models_for_master_key() {
@@ -140,6 +154,133 @@ async fn usage_api_reads_sqlite_usage_database() {
 }
 
 #[tokio::test]
+async fn gemini_native_endpoint_uses_openrelay_key_and_records_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let (upstream_url, mut captured, shutdown, server) = spawn_gemini_upstream().await;
+    let mut cfg = AppConfig::default();
+    cfg.providers.push(ProviderConfig {
+        id: "gemini".to_string(),
+        name: "Gemini".to_string(),
+        provider_type: "gemini".to_string(),
+        base_url: Some(format!("{upstream_url}/v1beta")),
+        api_key: "provider-gemini-key".to_string(),
+        user_agent: None,
+        models: vec![ModelConfig {
+            model_name: "gemini-local".to_string(),
+            model_id: "gemini-1.5-pro".to_string(),
+        }],
+    });
+    cfg.virtual_keys.push(VirtualKeyConfig {
+        name: "gemini-user".to_string(),
+        key: "client-key".to_string(),
+        enabled: Some(true),
+        allowed_models: Some(vec!["gemini-local".to_string()]),
+        budget: None,
+        rpm: None,
+        expires_at: None,
+    });
+    save_config(dir.path(), &cfg).unwrap();
+
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/gemini/v1beta/models/gemini-local:generateContent?key=client-key")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"contents": [{"parts": [{"text": "hello"}]}]}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let captured = captured.recv().await.unwrap();
+    assert_eq!(
+        captured.path_and_query,
+        "/v1beta/models/gemini-1.5-pro:generateContent"
+    );
+    assert_eq!(captured.authorization, None);
+    assert_eq!(captured.google_key.as_deref(), Some("provider-gemini-key"));
+
+    let page = Database::open(dir.path())
+        .unwrap()
+        .usage_page(1, 20)
+        .unwrap();
+    assert_eq!(page.pagination.total, 1);
+    assert_eq!(page.entries[0].model, "gemini-local");
+    assert_eq!(page.entries[0].key_name, "gemini-user");
+    assert_eq!(page.entries[0].input_tokens, 23);
+    assert_eq!(page.entries[0].output_tokens, 11);
+
+    let _ = shutdown.send(());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn gemini_native_endpoint_enforces_model_rpm_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let (upstream_url, mut captured, shutdown, server) = spawn_gemini_upstream().await;
+    let mut cfg = AppConfig::default();
+    cfg.limits = json!({"gemini-local": {"rpm": 1}});
+    cfg.providers.push(ProviderConfig {
+        id: "gemini".to_string(),
+        name: "Gemini".to_string(),
+        provider_type: "gemini".to_string(),
+        base_url: Some(format!("{upstream_url}/v1beta")),
+        api_key: "provider-gemini-key".to_string(),
+        user_agent: None,
+        models: vec![ModelConfig {
+            model_name: "gemini-local".to_string(),
+            model_id: "gemini-1.5-pro".to_string(),
+        }],
+    });
+    save_config(dir.path(), &cfg).unwrap();
+    Database::open(dir.path())
+        .unwrap()
+        .record_usage(&UsageLog {
+            timestamp: Utc::now().to_rfc3339(),
+            request_id: "recent".to_string(),
+            model: "gemini-local".to_string(),
+            key_name: "master".to_string(),
+            input_tokens: 1,
+            cached_tokens: 0,
+            cached_write_tokens: 0,
+            output_tokens: 1,
+            cost: 0.0,
+            status: 200,
+            duration_ms: 1,
+            stream: false,
+            user_agent: "test".to_string(),
+            error: String::new(),
+            path: "/gemini/v1beta/models/gemini-local:generateContent".to_string(),
+        })
+        .unwrap();
+
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/gemini/v1beta/models/gemini-local:generateContent")
+                .header("authorization", "Bearer openrelay-master")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"contents": []}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(captured.try_recv().is_err());
+
+    let _ = shutdown.send(());
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn conversation_storage_requires_user_selected_directory() {
     let dir = tempfile::tempdir().unwrap();
     openrelay::config::ensure_files(dir.path()).unwrap();
@@ -218,4 +359,59 @@ async fn login_token(app: axum::Router) -> String {
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     value["token"].as_str().unwrap().to_string()
+}
+
+async fn spawn_gemini_upstream() -> (
+    String,
+    mpsc::UnboundedReceiver<CapturedRequest>,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = mpsc::unbounded_channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let app = Router::new()
+        .route("/*path", any(capture_gemini_request))
+        .with_state(tx);
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .unwrap();
+    });
+    (format!("http://{addr}"), rx, shutdown_tx, server)
+}
+
+async fn capture_gemini_request(
+    State(tx): State<mpsc::UnboundedSender<CapturedRequest>>,
+    uri: Uri,
+    headers: HeaderMap,
+    _body: axum::body::Bytes,
+) -> impl IntoResponse {
+    let _ = tx.send(CapturedRequest {
+        path_and_query: uri
+            .path_and_query()
+            .map(|pq| pq.as_str().to_string())
+            .unwrap_or_else(|| uri.path().to_string()),
+        authorization: headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+        google_key: headers
+            .get("x-goog-api-key")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    });
+    Json(json!({
+        "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+        "usageMetadata": {
+            "promptTokenCount": 23,
+            "candidatesTokenCount": 11,
+            "totalTokenCount": 34
+        }
+    }))
 }

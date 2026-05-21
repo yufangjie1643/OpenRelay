@@ -6,7 +6,7 @@ OpenRelay is a personal unified LLM API gateway. It is now a Rust-first Windows 
 
 ## 功能特性
 
-- 统一 OpenAI 兼容代理：支持 `/v1/*`、`/proxy/v1/*` 以及常见无前缀兼容路径。
+- 统一代理入口：支持 OpenAI 兼容接口、Gemini 原生接口、`/proxy/*` 前缀以及常见无前缀兼容路径。
 - 多服务商配置：在管理面板中维护服务商、模型别名、上游模型 ID、Base URL、API Key 和 User-Agent。
 - 自动生成兼容配置 YAML：保存配置时同步写入本地 `openrelay-config.yaml`。
 - 虚拟密钥：支持模型白名单、预算、RPM、启用状态和过期时间。
@@ -75,7 +75,7 @@ http://localhost:18783
 1. 打开管理面板并登录。
 2. 在“模型配置”中添加服务商，填写 Base URL、API Key、User-Agent 和模型映射。
 3. 在“虚拟密钥”中创建调用方使用的密钥，并按需设置模型白名单、预算和 RPM。
-4. 使用 OpenAI 兼容客户端请求本代理地址。
+4. 使用 OpenAI 兼容客户端或 Gemini 原生客户端请求本代理地址。
 5. 在“用量统计”中查看 SQLite 记录的请求用量和成本。
 
 ## OpenAI 兼容调用
@@ -98,6 +98,27 @@ curl.exe http://localhost:18783/v1/chat/completions `
 - `POST /v1/embeddings`
 - `POST /v1/messages`
 - `POST /proxy/v1/chat/completions`
+
+所有 OpenAI 兼容端点都会统一经过 OpenRelay 的密钥校验、模型白名单、限额检查和 SQLite 用量统计。
+
+## Gemini 原生调用
+
+Gemini 原生兼容入口：
+
+- `GET /gemini/v1beta/models`
+- `POST /gemini/v1beta/models/{model}:generateContent`
+- `POST /gemini/v1beta/models/{model}:streamGenerateContent`
+- `POST /proxy/gemini/v1beta/models/{model}:generateContent`
+
+可以用 Gemini 常见的 `?key=` 或 `x-goog-api-key` 传 OpenRelay 虚拟密钥。OpenRelay 会在转发到 Google 时替换为服务商配置里的真实 API Key：
+
+```powershell
+curl.exe "http://localhost:18783/gemini/v1beta/models/your-local-model:generateContent?key=sk-vk-your-key" `
+  -H "Content-Type: application/json" `
+  -d "{\"contents\":[{\"parts\":[{\"text\":\"hello\"}]}]}"
+```
+
+Gemini 原生端点同样会统一经过密钥校验、模型白名单、限额检查和 SQLite 用量统计。
 
 ## 配置和运行态文件
 
