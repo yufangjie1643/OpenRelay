@@ -2,8 +2,9 @@ use crate::config::{
     ensure_files, load_config, save_config, AppConfig, ConfigError, ConversationStorage,
     VirtualKeyConfig,
 };
+use crate::database::{Database, DatabaseError, UsageLog};
 use crate::proxy::{
-    build_models_response, build_upstream_url, check_virtual_key, estimate_tokens,
+    build_models_response, build_upstream_url, calc_cost, check_virtual_key, estimate_tokens,
     extract_usage_tokens, get_request_model, is_models_endpoint, resolve_provider,
     rewrite_json_model,
 };
@@ -21,6 +22,7 @@ use serde_json::{json, Value};
 use std::future::Future;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
@@ -37,6 +39,8 @@ pub enum ServerError {
     Json(#[from] serde_json::Error),
     #[error("HTTP client error: {0}")]
     Reqwest(#[from] reqwest::Error),
+    #[error("Database error: {0}")]
+    Database(#[from] DatabaseError),
     #[error("JWT error: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
     #[error("invalid header value: {0}")]
@@ -59,14 +63,18 @@ impl IntoResponse for ServerError {
 #[derive(Clone)]
 pub struct ServerState {
     pub root: Arc<PathBuf>,
+    pub database: Database,
     client: reqwest::Client,
     jwt_secret: Arc<String>,
 }
 
 impl ServerState {
     pub fn new(root: PathBuf) -> Self {
+        let database = Database::open(&root)
+            .unwrap_or_else(|err| panic!("failed to open OpenRelay database: {err}"));
         Self {
             root: Arc::new(root),
+            database,
             client: reqwest::Client::new(),
             jwt_secret: Arc::new(
                 std::env::var("JWT_SECRET")
@@ -105,6 +113,16 @@ struct TestProviderRequest {
     api_key: String,
     #[serde(default)]
     user_agent: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsageQuery {
+    #[serde(default)]
+    page: Option<u64>,
+    #[serde(default, rename = "pageSize")]
+    page_size: Option<u64>,
+    #[serde(default)]
+    token: Option<String>,
 }
 
 pub fn build_router(state: ServerState) -> Router {
@@ -171,10 +189,14 @@ pub fn root_from_env() -> PathBuf {
     std::env::var("OPENRELAY_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    if dir.join("public").join("index.html").exists() {
+                        return dir.to_path_buf();
+                    }
+                }
+            }
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap_or(Path::new("."))
-                .to_path_buf()
         })
 }
 
@@ -468,20 +490,23 @@ async fn detect_models(
 async fn get_usage(
     State(state): State<ServerState>,
     headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<UsageQuery>,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    Ok(Json(json!({
-        "stats": { "totalRequests": 0, "totalInputTokens": 0, "totalOutputTokens": 0, "totalCost": 0, "byModel": {}, "byKey": {} },
-        "logs": [],
-        "pagination": { "page": 1, "pageSize": 20, "total": 0, "totalPages": 1 }
-    })).into_response())
+    Ok(Json(
+        state
+            .database
+            .usage_page(query.page.unwrap_or(1), query.page_size.unwrap_or(20))?,
+    )
+    .into_response())
 }
 
 async fn export_usage(
     State(state): State<ServerState>,
     headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<UsageQuery>,
 ) -> Result<Response, ServerError> {
-    require_admin(&state, &headers)?;
+    require_admin_or_query_token(&state, &headers, query.token.as_deref())?;
     Ok((
         [
             (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
@@ -490,16 +515,27 @@ async fn export_usage(
                 "attachment; filename=\"usage-export-rust.csv\"",
             ),
         ],
-        "timestamp,model,key_name,input_tokens,cached_tokens,output_tokens,cost,status\n",
+        state.database.export_usage_csv()?,
     )
         .into_response())
 }
 
-async fn clear_usage() -> Json<Value> {
-    Json(json!({ "success": true }))
+async fn clear_usage(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ServerError> {
+    require_admin(&state, &headers)?;
+    state.database.clear_usage()?;
+    Ok(Json(json!({ "success": true })))
 }
-async fn merge_usage() -> Json<Value> {
-    Json(json!({ "success": true, "changed": false }))
+async fn merge_usage(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ServerError> {
+    require_admin(&state, &headers)?;
+    Ok(Json(
+        json!({ "success": true, "changed": false, "database": true }),
+    ))
 }
 async fn get_conversations() -> Json<Value> {
     Json(json!({ "enabled": false, "entries": [] }))
@@ -540,6 +576,7 @@ async fn proxy_handler(
     headers: HeaderMap,
     request: Request<Body>,
 ) -> Result<Response, ServerError> {
+    let started = Instant::now();
     let cfg = load_config(&state.root)?;
     let raw_path = uri
         .path_and_query()
@@ -593,6 +630,27 @@ async fn proxy_handler(
             Json(json!({ "error": { "message": "请求体缺少 model 字段，无法路由到兼容 API 服务商", "type": "invalid_request_error", "code": 400 } })),
         ).into_response());
     };
+    let key_name = key_check
+        .virtual_key
+        .as_ref()
+        .map(|key| {
+            if key.name.trim().is_empty() {
+                "virtual-key".to_string()
+            } else {
+                key.name.clone()
+            }
+        })
+        .unwrap_or_else(|| "master".to_string());
+    let request_id = Uuid::new_v4().to_string();
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let stream = json_body
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let Some(provider) = resolve_provider(&model, &cfg) else {
         return Ok((
             StatusCode::BAD_REQUEST,
@@ -649,16 +707,53 @@ async fn proxy_handler(
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let content_disposition = response.headers().get(header::CONTENT_DISPOSITION).cloned();
     let bytes = response.bytes().await?;
-    let _estimated_input = estimate_tokens(&json_body);
+    let estimated_input = estimate_tokens(&json_body);
+    let mut usage = crate::proxy::UsageTokens {
+        input_tokens: estimated_input,
+        ..Default::default()
+    };
     if response_content_type
         .to_str()
         .unwrap_or("")
         .contains("json")
     {
         if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
-            let _usage = extract_usage_tokens(&value, _estimated_input);
+            usage = extract_usage_tokens(&value, estimated_input);
         }
     }
+    let cost = calc_cost(
+        &model,
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cached_tokens,
+        usage.cached_write_tokens,
+        &cfg.pricing,
+    );
+    let error = if status.is_success() {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&bytes)
+            .chars()
+            .take(300)
+            .collect::<String>()
+    };
+    let _ = state.database.record_usage(&UsageLog {
+        timestamp: Utc::now().to_rfc3339(),
+        request_id,
+        model: model.clone(),
+        key_name,
+        input_tokens: usage.input_tokens,
+        cached_tokens: usage.cached_tokens,
+        cached_write_tokens: usage.cached_write_tokens,
+        output_tokens: usage.output_tokens,
+        cost,
+        status: status.as_u16(),
+        duration_ms: started.elapsed().as_millis() as u64,
+        stream,
+        user_agent,
+        error,
+        path: target_path.to_string(),
+    });
     let mut out = Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, response_content_type);
@@ -671,21 +766,7 @@ async fn proxy_handler(
 async fn static_file(State(state): State<ServerState>, uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let relative = if path.is_empty() { "index.html" } else { path };
-    let file = if let Some(vendor_path) = relative.strip_prefix("vendor/js-yaml/") {
-        state
-            .root
-            .join("web")
-            .join("node_modules")
-            .join("js-yaml")
-            .join("dist")
-            .join(safe_relative(vendor_path))
-    } else {
-        state
-            .root
-            .join("web")
-            .join("public")
-            .join(safe_relative(relative))
-    };
+    let file = state.root.join("public").join(safe_relative(relative));
     match tokio::fs::read(&file).await {
         Ok(bytes) => {
             let mime = mime_guess::from_path(file)
@@ -711,8 +792,23 @@ fn require_admin(state: &ServerState, headers: &HeaderMap) -> Result<(), ServerE
     let Some(token) = bearer_token(headers) else {
         return Err(ServerError::Unauthorized);
     };
+    require_admin_token(state, &token)
+}
+
+fn require_admin_or_query_token(
+    state: &ServerState,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+) -> Result<(), ServerError> {
+    if let Some(token) = query_token.filter(|token| !token.trim().is_empty()) {
+        return require_admin_token(state, token);
+    }
+    require_admin(state, headers)
+}
+
+fn require_admin_token(state: &ServerState, token: &str) -> Result<(), ServerError> {
     decode::<Claims>(
-        &token,
+        token,
         &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
         &Validation::default(),
     )?;

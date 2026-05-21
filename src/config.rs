@@ -166,10 +166,6 @@ pub fn ensure_files(root: &Path) -> Result<(), ConfigError> {
     if changed || !yaml_path(root).exists() {
         save_config(root, &cfg)?;
     }
-    let usage_file = root.join("usage.jsonl");
-    if !usage_file.exists() {
-        fs::write(usage_file, "")?;
-    }
     Ok(())
 }
 

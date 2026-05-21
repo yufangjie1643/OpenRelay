@@ -2,7 +2,7 @@
 name = "openrelay"
 version = "0.1.0"
 edition = "2021"
-description = "OpenRelay Rust backend prototype"
+description = "A personal unified LLM API gateway"
 
 [lib]
 name = "openrelay"
@@ -19,6 +19,7 @@ chrono = { version = "0.4", features = ["serde"] }
 jsonwebtoken = "9"
 mime_guess = "2"
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"

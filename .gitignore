@@ -1,10 +1,14 @@
-# Dependencies
-node_modules/
+# Build outputs
+target/
+dist/
 .venv/
 __pycache__/
 *.pyc
 
 # Runtime data & logs
+openrelay.db
+openrelay.db-*
+*.db
 usage.jsonl
 conversations/
 *.log
@@ -16,8 +20,6 @@ config.json
 litellm-config.yaml
 openrelay-config.yaml
 *.res
-target/
-rust-backend/target/
 
 # OS files
 Thumbs.db

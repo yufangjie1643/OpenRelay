@@ -281,8 +281,8 @@
       <div class="stat-card"><div class="stat-value" id="statCacheRate">0%</div><div class="stat-label">缓存命中率</div></div>
     </div>
     <div class="actions" style="margin-bottom:1rem">
-      <button class="btn btn-danger" onclick="clearUsage()" title="清空当前 usage.jsonl 所有记录，不可恢复">清空记录</button>
-      <button class="btn btn-secondary" onclick="mergeUsage()" title="将当前 usage.jsonl 归档并清空">归档并清空</button>
+      <button class="btn btn-danger" onclick="clearUsage()" title="清空当前 SQLite 用量数据库记录，不可恢复">清空记录</button>
+      <button class="btn btn-secondary" onclick="mergeUsage()" title="SQLite 数据库模式下保留兼容操作">归档并清空</button>
       <button class="btn btn-primary" onclick="exportUsageCsv()" title="导出所有 usage 记录为 CSV">导出 CSV</button>
     </div>
     <div class="card"><h2>按模型统计</h2><table><thead><tr><th>模型</th><th>请求数</th><th>Input</th><th>缓存</th><th>Output</th><th>预估成本</th></tr></thead><tbody id="usageByModel"></tbody></table></div>
@@ -476,7 +476,6 @@
 
 <div class="toast" id="toast">保存成功</div>
 
-<script src="/vendor/js-yaml/js-yaml.min.js"></script>
 <script>
 const token = localStorage.getItem('openrelay_token');
 if (!token) window.location.href = '/login.html';

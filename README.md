@@ -2,69 +2,49 @@
 
 个人统一 LLM API 网关。
 
-OpenRelay is a personal unified LLM API gateway. It provides a Windows-first OpenAI-compatible proxy with a local admin panel, model routing, virtual keys, usage tracking, conversation records, and active connection management. The service listens on `http://localhost:18783` by default and does not require any separate proxy process or an extra `4000` port.
+OpenRelay is a personal unified LLM API gateway. It is now a Rust-first Windows application: one `openrelay.exe` runs the local admin panel, OpenAI-compatible proxy, SQLite usage database, and system tray manager on `http://localhost:18783`.
 
 ## 功能特性
 
 - 统一 OpenAI 兼容代理：支持 `/v1/*`、`/proxy/v1/*` 以及常见无前缀兼容路径。
 - 多服务商配置：在管理面板中维护服务商、模型别名、上游模型 ID、Base URL、API Key 和 User-Agent。
-- 自动生成兼容配置 YAML：保存配置时同步写入本地 `openrelay-config.yaml`，便于迁移和排查。
-- 虚拟密钥：支持按密钥设置模型白名单、预算、RPM、启用状态和过期时间。
-- 用量统计：记录请求数、输入/输出 token、缓存 token、费用、状态码、耗时和 User-Agent。
-- 对话记录：可选保存请求/响应，并提供阅读器、原始 JSON、流式输出解析和删除功能。
-- 活跃连接管理：查看正在进行的请求，并可在管理面板中中止请求。
-- Windows 启动入口：提供批处理启动脚本和 Rust 内置系统托盘启动器。
+- 自动生成兼容配置 YAML：保存配置时同步写入本地 `openrelay-config.yaml`。
+- 虚拟密钥：支持模型白名单、预算、RPM、启用状态和过期时间。
+- SQLite 用量数据库：记录请求数、token、缓存 token、费用、状态码、耗时、User-Agent 和请求 ID。
+- Windows 托盘：Rust exe 内置托盘图标，右键菜单为“打开管理面板”“重启服务”“退出 OpenRelay”。
+- 静态管理面板：`public/` 由 Rust 后端直接托管，不再依赖 Node.js 服务。
 
 ## 环境要求
 
-- Windows 环境优先支持。
-- Node.js 18 或更高版本。
-- npm。
-- Rust 后端分支需要 Rust stable 工具链。
+- Windows 优先支持。
+- Rust stable 工具链。
 
 ## 快速开始
 
 从仓库根目录执行：
 
 ```powershell
-.\setup.ps1
 .\start.bat
 ```
 
-也可以直接进入 `web` 目录启动：
+`start.bat` 会优先启动同目录的 `openrelay.exe`；源码 checkout 中没有该文件时，会运行 `cargo build --release`，然后启动：
 
-```powershell
-cd web
-npm install
-npm start
+```text
+target\release\openrelay.exe
 ```
 
-Rust 后端初版位于 `rust-backend/`，可在 `rust-backend` 分支中试用：
+也可以手动运行：
 
 ```powershell
-.\start-rust.bat
-```
-
-`start-rust.bat` 会在需要时编译 `rust-backend\target\release\openrelay.exe`，然后启动同一个 Rust 可执行文件。该 exe 内置系统托盘功能，右键菜单为“打开管理面板”“重启服务”“退出 OpenRelay”。
-
-或手动运行：
-
-```powershell
-cd rust-backend
-$env:OPENRELAY_ROOT = (Resolve-Path ..).Path
 cargo run --release
 ```
 
 如果需要控制台模式并禁用托盘：
 
 ```powershell
-cd rust-backend
-$env:OPENRELAY_ROOT = (Resolve-Path ..).Path
 $env:OPENRELAY_NO_TRAY = "1"
 cargo run
 ```
-
-当前 Rust 初版提供登录、配置读写、定价/限额/虚拟密钥 API、模型列表、基础 OpenAI 兼容转发、静态前端托管和轻量的用量/对话/连接占位接口。完整用量归档、对话保存、活跃连接中止和所有历史边缘路径仍以后续迁移为准。
 
 启动后访问：
 
@@ -87,11 +67,9 @@ http://localhost:18783
 2. 在“模型配置”中添加服务商，填写 Base URL、API Key、User-Agent 和模型映射。
 3. 在“虚拟密钥”中创建调用方使用的密钥，并按需设置模型白名单、预算和 RPM。
 4. 使用 OpenAI 兼容客户端请求本代理地址。
-5. 在“用量统计”“对话记录”“活跃连接”中查看运行情况。
+5. 在“用量统计”中查看 SQLite 记录的请求用量和成本。
 
 ## OpenAI 兼容调用
-
-示例请求：
 
 ```powershell
 curl.exe http://localhost:18783/v1/chat/completions `
@@ -112,71 +90,49 @@ curl.exe http://localhost:18783/v1/chat/completions `
 - `POST /v1/messages`
 - `POST /proxy/v1/chat/completions`
 
-项目还保留了 MiniMax 等服务商的部分原生路径转发能力，例如语音、图像、视频和音乐生成相关端点。
-
 ## 配置和运行态文件
 
 仓库中只提交模板和源码，以下文件为本地运行时生成或包含敏感信息，默认不会提交：
 
 - `config.json`：本地真实配置，可能包含 API Key、管理员密码哈希和虚拟密钥。
 - `openrelay-config.yaml`：由管理面板根据配置自动生成。
-- `usage.jsonl`：用量日志。
-- `conversations/`：可选对话记录目录。
-- `web/node_modules/`：Node.js 依赖。
+- `openrelay.db`：SQLite 用量数据库和后续运行态数据。
+- `conversations/`：历史兼容的对话记录目录，不再作为主要存储。
+- `target/`：Rust 构建产物。
 
 可从 `config.example.json` 了解配置结构，但不要把真实密钥写入模板文件。
 
 ## Windows 启动脚本
 
-- `setup.ps1`：安装 `web` 目录下的 npm 依赖。
-- `start.bat`：在当前窗口启动 Web UI / API。
-- `start-web.bat`：等价的 Web 服务启动脚本。
-- `start-all.bat`：新开命令窗口启动服务。
-- `start-rust.bat`：编译并启动 Rust release 版 `openrelay.exe`，托盘功能内置在该 exe 中。
-- `start-tray.vbs`：兼容旧快捷方式，直接启动 `rust-backend\target\release\openrelay.exe`。
+- `start.bat`：启动同目录 `openrelay.exe`，或编译并启动 Rust release 版。
+- `start-rust.bat`：兼容旧习惯，等价于 `start.bat`。
+- `start-tray.vbs`：兼容旧快捷方式，直接启动 `target\release\openrelay.exe`。
 
 ## 测试
 
-从 `web` 目录运行：
-
 ```powershell
-npm test
-```
-
-也可以单独运行：
-
-```powershell
-npm run test:frontend
-npm run test:proxy
-```
-
-Rust 后端测试：
-
-```powershell
-cd rust-backend
 cargo test
 ```
 
-当前测试覆盖前端静态约束、内联脚本解析、代理路径兼容、模型解析、用量 token 提取、计费、归档、对话存储路径和 Rust 内置托盘启动约束。
+当前测试覆盖配置读写、代理路径兼容、模型解析、用量 token 提取、计费、SQLite 用量数据库、HTTP 路由、静态资源布局和 Rust 内置托盘约束。
 
 ## 项目结构
 
 ```text
-web/server.js              Express 服务、配置迁移、代理、认证、用量和对话记录
-rust-backend/              Rust 后端初版，基于 Axum 和 Reqwest
-web/public/index.html      管理面板 UI
-web/public/login.html      登录页
-web/package.json           Node.js 依赖和 npm scripts
+src/                       Rust 后端、代理、配置、SQLite 数据库和托盘集成
+tests/                     Rust 集成测试
+public/index.html          管理面板 UI
+public/login.html          登录页
+assets/openrelay.ico       托盘图标
 config.example.json        可提交的配置模板
-setup.ps1                  Windows 安装脚本
-start*.bat / start*.vbs    Windows 启动脚本
-assets/                    图标等静态资源
-test/                      辅助分析脚本
+start.bat                  Windows 启动脚本
+start-rust.bat             兼容启动脚本
+start-tray.vbs             兼容旧快捷方式
 ```
 
 ## 安全建议
 
-- 不要提交真实 API Key、`config.json`、`openrelay-config.yaml`、`usage.jsonl` 或 `conversations/`。
+- 不要提交真实 API Key、`config.json`、`openrelay-config.yaml`、`openrelay.db` 或 `conversations/`。
 - 首次启动后立即修改默认管理员密码。
 - 共享或长期运行时设置强随机 `JWT_SECRET`。
 - 修改默认 `general_settings.master_key`。
