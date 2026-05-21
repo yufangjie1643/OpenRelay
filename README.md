@@ -13,13 +13,14 @@ OpenRelay is a personal unified LLM API gateway. It provides a Windows-first Ope
 - 用量统计：记录请求数、输入/输出 token、缓存 token、费用、状态码、耗时和 User-Agent。
 - 对话记录：可选保存请求/响应，并提供阅读器、原始 JSON、流式输出解析和删除功能。
 - 活跃连接管理：查看正在进行的请求，并可在管理面板中中止请求。
-- Windows 启动入口：提供批处理启动脚本和可选系统托盘启动器。
+- Windows 启动入口：提供批处理启动脚本和 Rust 内置系统托盘启动器。
 
 ## 环境要求
 
 - Windows 环境优先支持。
 - Node.js 18 或更高版本。
 - npm。
+- Rust 后端分支需要 Rust stable 工具链。
 
 ## 快速开始
 
@@ -44,11 +45,22 @@ Rust 后端初版位于 `rust-backend/`，可在 `rust-backend` 分支中试用�
 .\start-rust.bat
 ```
 
+`start-rust.bat` 会在需要时编译 `rust-backend\target\release\openrelay.exe`，然后启动同一个 Rust 可执行文件。该 exe 内置系统托盘功能，右键菜单为“打开管理面板”“重启服务”“退出 OpenRelay”。
+
 或手动运行：
 
 ```powershell
 cd rust-backend
 $env:OPENRELAY_ROOT = (Resolve-Path ..).Path
+cargo run --release
+```
+
+如果需要控制台模式并禁用托盘：
+
+```powershell
+cd rust-backend
+$env:OPENRELAY_ROOT = (Resolve-Path ..).Path
+$env:OPENRELAY_NO_TRAY = "1"
 cargo run
 ```
 
@@ -120,16 +132,8 @@ curl.exe http://localhost:18783/v1/chat/completions `
 - `start.bat`：在当前窗口启动 Web UI / API。
 - `start-web.bat`：等价的 Web 服务启动脚本。
 - `start-all.bat`：新开命令窗口启动服务。
-- `start-tray.vbs`：兼容旧快捷方式，委托给 `start-tray.exe`。
-
-如果需要重新构建托盘启动器，可使用 `start-tray.c` 顶部注释中的 MinGW 命令：
-
-```powershell
-windres start-tray.rc -O coff -o start-tray.res
-gcc start-tray.c start-tray.res -O2 -Wall -Wextra -mwindows -municode -o start-tray.exe
-```
-
-`start-tray.exe` 是生成物，默认不提交。
+- `start-rust.bat`：编译并启动 Rust release 版 `openrelay.exe`，托盘功能内置在该 exe 中。
+- `start-tray.vbs`：兼容旧快捷方式，直接启动 `rust-backend\target\release\openrelay.exe`。
 
 ## 测试
 
@@ -153,7 +157,7 @@ cd rust-backend
 cargo test
 ```
 
-当前测试覆盖前端静态约束、内联脚本解析、代理路径兼容、模型解析、用量 token 提取、计费、归档、对话存储路径和托盘启动约束。
+当前测试覆盖前端静态约束、内联脚本解析、代理路径兼容、模型解析、用量 token 提取、计费、归档、对话存储路径和 Rust 内置托盘启动约束。
 
 ## 项目结构
 

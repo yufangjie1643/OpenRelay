@@ -18,6 +18,7 @@ use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::future::Future;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -163,23 +164,51 @@ pub fn build_router(state: ServerState) -> Router {
 }
 
 pub async fn run_from_env() -> Result<(), ServerError> {
-    let root = std::env::var("OPENRELAY_ROOT")
+    serve(root_from_env(), port_from_env()).await
+}
+
+pub fn root_from_env() -> PathBuf {
+    std::env::var("OPENRELAY_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .unwrap_or(Path::new("."))
                 .to_path_buf()
-        });
-    ensure_files(&root)?;
-    let port: u16 = std::env::var("PORT")
+        })
+}
+
+pub fn port_from_env() -> u16 {
+    std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(18783);
+        .unwrap_or(18783)
+}
+
+pub async fn serve(root: PathBuf, port: u16) -> Result<(), ServerError> {
+    ensure_files(&root)?;
     let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).await?;
     println!("OpenRelay Rust backend running at http://localhost:{port}");
     axum::serve(listener, build_router(ServerState::new(root))).await?;
+    Ok(())
+}
+
+pub async fn serve_with_shutdown<F>(
+    root: PathBuf,
+    port: u16,
+    shutdown: F,
+) -> Result<(), ServerError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    ensure_files(&root)?;
+    let addr = format!("0.0.0.0:{port}");
+    let listener = TcpListener::bind(&addr).await?;
+    println!("OpenRelay Rust backend running at http://localhost:{port}");
+    axum::serve(listener, build_router(ServerState::new(root)))
+        .with_graceful_shutdown(shutdown)
+        .await?;
     Ok(())
 }
 

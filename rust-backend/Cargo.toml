@@ -23,10 +23,21 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 thiserror = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "signal", "sync"] }
 tower-http = { version = "0.5", features = ["cors"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging"
+] }
 
 [dev-dependencies]
 tempfile = "3"

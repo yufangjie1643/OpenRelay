@@ -1,14 +1,15 @@
-' Compatibility shim for existing shortcuts.
 Set WshShell = CreateObject("WScript.Shell")
 Set FSO = CreateObject("Scripting.FileSystemObject")
 
 scriptDir = FSO.GetParentFolderName(WScript.ScriptFullName)
-launcher = scriptDir & "\start-tray.exe"
+launcher = FSO.BuildPath(scriptDir, "rust-backend\target\release\openrelay.exe")
 
 If FSO.FileExists(launcher) Then
+  WshShell.CurrentDirectory = scriptDir
+  WshShell.Environment("PROCESS")("OPENRELAY_ROOT") = scriptDir
   WshShell.Run """" & launcher & """", 0, False
 Else
-  WshShell.Popup "start-tray.exe not found." & vbCrLf & "Build it from start-tray.c first.", 7, "OpenRelay", 48
+  WshShell.Popup "未找到 Rust release 可执行文件：" & vbCrLf & launcher & vbCrLf & vbCrLf & "请先运行 start-rust.bat 编译并启动。", 10, "OpenRelay", 48
 End If
 
 Set WshShell = Nothing
