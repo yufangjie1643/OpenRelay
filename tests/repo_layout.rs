@@ -9,10 +9,14 @@ fn repository_keeps_rust_runtime_layout_only() {
     assert!(root.join("public").join("index.html").exists());
     assert!(root.join("public").join("login.html").exists());
     assert!(root.join("assets").join("openrelay.ico").exists());
+    assert!(root.join("build.bat").exists());
 
     assert!(!root.join("web").join("server.js").exists());
     assert!(!root.join("web").join("package.json").exists());
     assert!(!root.join("rust-backend").join("Cargo.toml").exists());
+    assert!(!root.join("start.bat").exists());
+    assert!(!root.join("start-rust.bat").exists());
+    assert!(!root.join("start-tray.vbs").exists());
 }
 
 #[test]

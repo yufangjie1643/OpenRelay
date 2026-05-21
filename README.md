@@ -21,19 +21,25 @@ OpenRelay is a personal unified LLM API gateway. It is now a Rust-first Windows 
 
 ## 快速开始
 
-从仓库根目录执行：
+发布包解压后直接运行：
 
 ```powershell
-.\start.bat
+.\openrelay.exe
 ```
 
-`start.bat` 会优先启动同目录的 `openrelay.exe`；源码 checkout 中没有该文件时，会运行 `cargo build --release`，然后启动：
+从源码构建：
+
+```powershell
+.\build.bat
+```
+
+`build.bat` 只负责编译 release 版：
 
 ```text
 target\release\openrelay.exe
 ```
 
-也可以手动运行：
+也可以直接用 Cargo 运行：
 
 ```powershell
 cargo run --release
@@ -102,11 +108,10 @@ curl.exe http://localhost:18783/v1/chat/completions `
 
 可从 `config.example.json` 了解配置结构，但不要把真实密钥写入模板文件。
 
-## Windows 启动脚本
+## Windows 构建
 
-- `start.bat`：启动同目录 `openrelay.exe`，或编译并启动 Rust release 版。
-- `start-rust.bat`：兼容旧习惯，等价于 `start.bat`。
-- `start-tray.vbs`：兼容旧快捷方式，直接启动 `target\release\openrelay.exe`。
+- `build.bat`：编译 release 版 `target\release\openrelay.exe`。
+- 发布包中直接运行 `openrelay.exe` 即可启动托盘和后端服务。
 
 ## 测试
 
@@ -125,9 +130,7 @@ public/index.html          管理面板 UI
 public/login.html          登录页
 assets/openrelay.ico       托盘图标
 config.example.json        可提交的配置模板
-start.bat                  Windows 启动脚本
-start-rust.bat             兼容启动脚本
-start-tray.vbs             兼容旧快捷方式
+build.bat                  Windows 构建脚本
 ```
 
 ## 安全建议
