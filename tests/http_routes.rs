@@ -6,7 +6,9 @@ use axum::routing::any;
 use axum::{Json, Router};
 use chrono::Utc;
 use futures_util::StreamExt;
-use openrelay::config::{save_config, AppConfig, ModelConfig, ProviderConfig, VirtualKeyConfig};
+use openrelay::config::{
+    load_config, save_config, AppConfig, ModelConfig, ProviderConfig, VirtualKeyConfig,
+};
 use openrelay::database::{Database, UsageLog};
 use openrelay::server::{build_router, ServerState};
 use serde_json::json;
@@ -120,6 +122,58 @@ async fn config_api_requires_admin_bearer_token() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn config_api_accepts_safe_config_body_from_frontend_save() {
+    let dir = tempfile::tempdir().unwrap();
+    openrelay::config::ensure_files(dir.path()).unwrap();
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/config")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(value["admin"]["password_hash"].is_null());
+    value["providers"] = json!([{
+        "id": "p1",
+        "name": "OpenAI",
+        "type": "openai",
+        "base_url": "https://api.example.com/v1",
+        "api_key": "provider-key",
+        "models": [{"model_name": "local-gpt", "model_id": "gpt-4o-mini"}]
+    }]);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/config")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(value.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let saved = load_config(dir.path()).unwrap();
+    assert_eq!(saved.providers[0].models[0].model_name, "local-gpt");
+    assert!(!saved.admin.password_hash.is_empty());
 }
 
 #[tokio::test]

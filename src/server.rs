@@ -350,10 +350,18 @@ async fn get_config(
 async fn post_config(
     State(state): State<ServerState>,
     headers: HeaderMap,
-    Json(mut incoming): Json<AppConfig>,
+    Json(mut incoming_value): Json<Value>,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
     let current = state.current_config().await;
+    if let Some(incoming) = incoming_value.as_object_mut() {
+        incoming.insert("admin".to_string(), serde_json::to_value(&current.admin)?);
+        incoming.insert(
+            "virtual_keys".to_string(),
+            serde_json::to_value(&current.virtual_keys)?,
+        );
+    }
+    let mut incoming: AppConfig = serde_json::from_value(incoming_value)?;
     incoming.admin = current.admin;
     incoming.virtual_keys = current.virtual_keys;
     save_config(&state.root, &incoming)?;
