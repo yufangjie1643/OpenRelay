@@ -111,6 +111,150 @@
       "cached_input": 0,
       "cached_write": 0,
       "output": 8.4
+    },
+    "speech-2.8-hd": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "speech-2.8-turbo": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "speech-2.6-hd": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "speech-2.6-turbo": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "speech-02-hd": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "speech-02-turbo": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "speech-01-hd": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "speech-01-turbo": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "MiniMax-Hailuo-2.3": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "MiniMax-Hailuo-2.3-Fast": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "MiniMax-Hailuo-02": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "T2V-01": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "I2V-01": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "I2V-01-live": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "I2V-01-Director": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "T2V-01-Director": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "I2V-01-Subject": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "S2V-01": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "image-01": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "image-01-live": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "music-2.6": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "music-cover": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "music-2.6-free": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
+    },
+    "music-cover-free": {
+      "input": 0,
+      "cached_input": 0,
+      "cached_write": 0,
+      "output": 0
     }
   },
   "limits": {},
@@ -128,9 +272,33 @@
         "MiniMax-M2.5-highspeed",
         "MiniMax-M2.1",
         "MiniMax-M2.1-highspeed",
-        "MiniMax-M2"
+        "MiniMax-M2",
+        "speech-2.8-hd",
+        "speech-2.8-turbo",
+        "speech-2.6-hd",
+        "speech-2.6-turbo",
+        "speech-02-hd",
+        "speech-02-turbo",
+        "speech-01-hd",
+        "speech-01-turbo",
+        "MiniMax-Hailuo-2.3",
+        "MiniMax-Hailuo-2.3-Fast",
+        "MiniMax-Hailuo-02",
+        "T2V-01",
+        "I2V-01",
+        "I2V-01-live",
+        "I2V-01-Director",
+        "T2V-01-Director",
+        "I2V-01-Subject",
+        "S2V-01",
+        "image-01",
+        "image-01-live",
+        "music-2.6",
+        "music-cover",
+        "music-2.6-free",
+        "music-cover-free"
       ],
-      "key": "sk-vk-450d97c7288b7f19b3b24918650e7989"
+      "key": "sk-vk-example"
     }
   ],
   "providers": [
@@ -201,6 +369,102 @@
         {
           "model_name": "MiniMax-M2",
           "model_id": "MiniMax-M2"
+        },
+        {
+          "model_name": "speech-2.8-hd",
+          "model_id": "speech-2.8-hd"
+        },
+        {
+          "model_name": "speech-2.8-turbo",
+          "model_id": "speech-2.8-turbo"
+        },
+        {
+          "model_name": "speech-2.6-hd",
+          "model_id": "speech-2.6-hd"
+        },
+        {
+          "model_name": "speech-2.6-turbo",
+          "model_id": "speech-2.6-turbo"
+        },
+        {
+          "model_name": "speech-02-hd",
+          "model_id": "speech-02-hd"
+        },
+        {
+          "model_name": "speech-02-turbo",
+          "model_id": "speech-02-turbo"
+        },
+        {
+          "model_name": "speech-01-hd",
+          "model_id": "speech-01-hd"
+        },
+        {
+          "model_name": "speech-01-turbo",
+          "model_id": "speech-01-turbo"
+        },
+        {
+          "model_name": "MiniMax-Hailuo-2.3",
+          "model_id": "MiniMax-Hailuo-2.3"
+        },
+        {
+          "model_name": "MiniMax-Hailuo-2.3-Fast",
+          "model_id": "MiniMax-Hailuo-2.3-Fast"
+        },
+        {
+          "model_name": "MiniMax-Hailuo-02",
+          "model_id": "MiniMax-Hailuo-02"
+        },
+        {
+          "model_name": "T2V-01",
+          "model_id": "T2V-01"
+        },
+        {
+          "model_name": "I2V-01",
+          "model_id": "I2V-01"
+        },
+        {
+          "model_name": "I2V-01-live",
+          "model_id": "I2V-01-live"
+        },
+        {
+          "model_name": "I2V-01-Director",
+          "model_id": "I2V-01-Director"
+        },
+        {
+          "model_name": "T2V-01-Director",
+          "model_id": "T2V-01-Director"
+        },
+        {
+          "model_name": "I2V-01-Subject",
+          "model_id": "I2V-01-Subject"
+        },
+        {
+          "model_name": "S2V-01",
+          "model_id": "S2V-01"
+        },
+        {
+          "model_name": "image-01",
+          "model_id": "image-01"
+        },
+        {
+          "model_name": "image-01-live",
+          "model_id": "image-01-live"
+        },
+        {
+          "model_name": "music-2.6",
+          "model_id": "music-2.6"
+        },
+        {
+          "model_name": "music-cover",
+          "model_id": "music-cover"
+        },
+        {
+          "model_name": "music-2.6-free",
+          "model_id": "music-2.6-free"
+        },
+        {
+          "model_name": "music-cover-free",
+          "model_id": "music-cover-free"
         }
       ]
     }

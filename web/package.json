@@ -5,7 +5,10 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test:frontend": "node frontend.test.js",
+    "test:proxy": "node proxy-compat.test.js",
+    "test": "npm run test:frontend && npm run test:proxy"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

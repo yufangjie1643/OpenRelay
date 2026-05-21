@@ -1,29 +1,30 @@
-# LiteLLM Proxy Setup Script
-# Run this first to create the local Python virtual environment
+# LiteLLM Unified Web Proxy Setup Script
+# Installs the Node.js admin UI / proxy dependencies.
 
 $ErrorActionPreference = "Stop"
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectDir
 
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  LiteLLM Proxy Setup" -ForegroundColor Cyan
+Write-Host "  LiteLLM Unified Web Proxy Setup" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
-# Check uv
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Error "uv not found. Please install uv first: https://github.com/astral-sh/uv"
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Error "Node.js not found. Please install Node.js first: https://nodejs.org/"
     exit 1
 }
 
-# Create venv
-Write-Host "Creating virtual environment..." -ForegroundColor Yellow
-uv venv .venv
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Write-Error "npm not found. Please install Node.js with npm first: https://nodejs.org/"
+    exit 1
+}
 
-# Install litellm with proxy extras
-Write-Host "Installing LiteLLM [proxy]..." -ForegroundColor Yellow
-uv pip install "litellm[proxy]" --python .venv\Scripts\python.exe
+Write-Host "Installing Web UI dependencies..." -ForegroundColor Yellow
+Push-Location (Join-Path $ProjectDir "web")
+npm install
+Pop-Location
 
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host "  Setup complete!" -ForegroundColor Green
-Write-Host "  Run .\start.bat to start the proxy." -ForegroundColor Green
+Write-Host "  Run .\start.bat to start http://localhost:18783." -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green

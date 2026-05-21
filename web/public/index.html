@@ -4,73 +4,89 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LiteLLM Proxy 管理面板</title>
+<script>
+(function() {
+  const key = 'litellm_theme_mode';
+  let mode = 'system';
+  try { mode = localStorage.getItem(key) || 'system'; } catch {}
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const resolved = mode === 'light' || mode === 'dark' ? mode : (prefersDark ? 'dark' : 'light');
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themeMode = mode;
+})();
+</script>
 <style>
-  :root{--bg:#0f172a;--card:#1e293b;--text:#e2e8f0;--muted:#94a3b8;--accent:#38bdf8;--accent2:#818cf8;--danger:#f87171;--ok:#34d399;--warn:#fbbf24;--border:#334155;}
+  :root,:root[data-theme="dark"]{color-scheme:dark;--bg:#101211;--card:#181c1a;--card-2:#202622;--text:#eef3ef;--muted:#9aa79e;--accent:#57d6b3;--accent2:#e5bd55;--danger:#ff7b72;--ok:#68d391;--success:#68d391;--warn:#f2b84b;--border:#303932;--input:#0c0f0d;--shadow:0 18px 40px rgba(0,0,0,.24);--header-bg:rgba(16,18,17,.92);--body-glow:linear-gradient(180deg,rgba(87,214,179,.08),rgba(16,18,17,0) 340px);--tab-active-text:#06110e;--card-gradient-end:#151816;}
+  :root[data-theme="light"]{color-scheme:light;--bg:#f4f7f4;--card:#ffffff;--card-2:#edf3ee;--text:#18211c;--muted:#667268;--accent:#147d65;--accent2:#b5790f;--danger:#c2413a;--ok:#16845f;--success:#16845f;--warn:#a26309;--border:#d8e1d9;--input:#fbfdfb;--shadow:0 16px 34px rgba(41,56,47,.11);--header-bg:rgba(250,253,250,.9);--body-glow:linear-gradient(180deg,rgba(20,125,101,.1),rgba(244,247,244,0) 320px);--tab-active-text:#f8fffb;--card-gradient-end:#f7faf7;}
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
-  header{background:linear-gradient(90deg,var(--accent),var(--accent2));padding:1rem 2rem;box-shadow:0 4px 20px rgba(0,0,0,.3);display:flex;justify-content:space-between;align-items:center}
-  header h1{font-size:1.25rem;font-weight:700}
+  body{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);background-image:var(--body-glow);color:var(--text);line-height:1.6;min-height:100vh;transition:background-color .18s ease,color .18s ease}
+  header{position:sticky;top:0;z-index:20;background:var(--header-bg);backdrop-filter:blur(18px);border-bottom:1px solid var(--border);padding:1rem 2rem;display:flex;justify-content:space-between;align-items:center}
+  header h1{font-size:1.08rem;font-weight:750;letter-spacing:.02em}
   header .user{display:flex;align-items:center;gap:1rem;font-size:.875rem}
-  header .user button{background:rgba(0,0,0,.2);border:none;color:#fff;padding:.375rem .75rem;border-radius:.375rem;cursor:pointer;font-size:.75rem}
-  header .user button:hover{background:rgba(0,0,0,.4)}
-  .container{max-width:1200px;margin:0 auto;padding:1.5rem}
-  .tabs{display:flex;gap:.5rem;margin-bottom:1.5rem;border-bottom:1px solid var(--border);padding-bottom:0;flex-wrap:wrap}
-  .tab{cursor:pointer;padding:.625rem 1.25rem;border:none;background:transparent;color:var(--muted);font-weight:600;font-size:.875rem;border-bottom:2px solid transparent;transition:.2s}
-  .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
-  .tab:hover{color:var(--text)}
+  header .user button{background:var(--card-2);border:1px solid var(--border);color:var(--text);padding:.375rem .75rem;border-radius:6px;cursor:pointer;font-size:.75rem}
+  header .user button:hover{border-color:var(--accent);color:var(--accent)}
+  .container{max-width:1240px;margin:0 auto;padding:1.25rem}
+  .tabs{display:flex;gap:.375rem;margin-bottom:1.25rem;border-bottom:1px solid var(--border);padding-bottom:.5rem;flex-wrap:wrap}
+  .tab{cursor:pointer;padding:.55rem .95rem;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--muted);font-weight:650;font-size:.84rem;transition:.18s}
+  .tab.active{color:var(--tab-active-text);background:var(--accent);border-color:var(--accent)}
+  .tab:hover:not(.active){color:var(--text);background:var(--card-2);border-color:var(--border)}
   .tab-content{display:none}
   .tab-content.active{display:block}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem}
   @media(max-width:900px){.grid{grid-template-columns:1fr}}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:1.25rem;box-shadow:0 4px 6px rgba(0,0,0,.1)}
-  .card h2{font-size:1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.5rem}
-  .badge{font-size:.75rem;padding:.2rem .5rem;border-radius:9999px;background:var(--accent);color:#0f172a;font-weight:600}
-  table{width:100%;border-collapse:collapse;font-size:.875rem}
+  .card{background:linear-gradient(180deg,var(--card),var(--card-gradient-end));border:1px solid var(--border);border-radius:8px;padding:1.15rem;box-shadow:var(--shadow);overflow:auto}
+  .card h2{font-size:.98rem;margin-bottom:1rem;display:flex;align-items:center;gap:.5rem;font-weight:750}
+  .badge{font-size:.72rem;padding:.16rem .45rem;border-radius:9999px;background:rgba(87,214,179,.14);border:1px solid rgba(87,214,179,.38);color:var(--accent);font-weight:700}
+  table{width:100%;border-collapse:collapse;font-size:.875rem;min-width:640px}
   th,td{padding:.625rem;text-align:left;border-bottom:1px solid var(--border)}
-  th{color:var(--muted);font-weight:600;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}
+  th{color:var(--muted);font-weight:700;font-size:.72rem;text-transform:uppercase}
   tr:hover td{background:rgba(255,255,255,.03)}
-  .btn{cursor:pointer;border:none;border-radius:.5rem;padding:.5rem 1rem;font-size:.875rem;font-weight:600;transition:all .2s;display:inline-flex;align-items:center;gap:.375rem}
-  .btn-primary{background:var(--accent);color:#0f172a}
-  .btn-primary:hover{opacity:.9;transform:translateY(-1px)}
+  .btn{cursor:pointer;border:1px solid transparent;border-radius:6px;padding:.5rem .9rem;font-size:.85rem;font-weight:700;transition:all .18s;display:inline-flex;align-items:center;gap:.375rem;white-space:nowrap}
+  .btn:disabled{opacity:.55;cursor:not-allowed;transform:none}
+  .btn-primary{background:var(--accent);color:var(--tab-active-text);border-color:var(--accent)}
+  .btn-primary:hover:not(:disabled){filter:brightness(1.05);transform:translateY(-1px)}
+  .btn-secondary{background:var(--card-2);color:var(--text);border-color:var(--border)}
+  .btn-secondary:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
   .btn-danger{background:var(--danger);color:#fff}
   .btn-warn{background:var(--warn);color:#422006}
   .btn-sm{padding:.375rem .75rem;font-size:.75rem}
   .form-group{margin-bottom:1rem}
   label{display:block;font-size:.875rem;font-weight:500;margin-bottom:.375rem;color:var(--muted)}
-  input,select,textarea{width:100%;padding:.5rem .75rem;border:1px solid var(--border);border-radius:.5rem;background:#0f172a;color:var(--text);font-size:.875rem}
-  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+  input,select,textarea{width:100%;padding:.5rem .7rem;border:1px solid var(--border);border-radius:6px;background:var(--input);color:var(--text);font-size:.875rem}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(87,214,179,.12)}
   textarea{font-family:monospace;min-height:120px;resize:vertical}
   .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
   .empty{text-align:center;padding:2rem;color:var(--muted)}
-  .yaml-preview{background:#0f172a;border:1px solid var(--border);border-radius:.5rem;padding:1rem;font-family:monospace;font-size:.8125rem;overflow:auto;max-height:400px;white-space:pre-wrap;color:var(--text)}
-  .toast{position:fixed;bottom:1.5rem;right:1.5rem;padding:.75rem 1.25rem;border-radius:.5rem;background:var(--ok);color:#064e3b;font-weight:600;box-shadow:0 10px 15px rgba(0,0,0,.2);opacity:0;transform:translateY(1rem);transition:all .3s;pointer-events:none;z-index:100}
+  .yaml-preview{background:var(--input);border:1px solid var(--border);border-radius:6px;padding:1rem;font-family:"Cascadia Code","SF Mono",Consolas,monospace;font-size:.8125rem;overflow:auto;max-height:400px;white-space:pre-wrap;color:var(--text)}
+  .toast{position:fixed;bottom:1.5rem;right:1.5rem;padding:.75rem 1.25rem;border-radius:8px;background:var(--ok);color:#062016;font-weight:700;box-shadow:var(--shadow);opacity:0;transform:translateY(1rem);transition:all .3s;pointer-events:none;z-index:100}
   .toast.show{opacity:1;transform:translateY(0)}
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
   .modal.active{display:flex}
-  .modal-content{background:var(--card);border:1px solid var(--border);border-radius:.75rem;width:90%;max-width:560px;max-height:90vh;overflow:auto;padding:1.5rem}
+  .modal-content{background:var(--card);border:1px solid var(--border);border-radius:8px;width:90%;max-width:560px;max-height:90vh;overflow:auto;padding:1.5rem;box-shadow:var(--shadow)}
   .modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem}
   .modal-header h3{font-size:1.125rem}
   .close-btn{background:none;border:none;color:var(--muted);font-size:1.5rem;cursor:pointer}
   .close-btn:hover{color:var(--text)}
   .hint{font-size:.75rem;color:var(--muted);margin-top:.25rem}
   .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem}
-  .stat-card{background:linear-gradient(135deg,#1e293b,#0f172a);border:1px solid var(--border);border-radius:.75rem;padding:1.25rem;text-align:center}
-  .stat-value{font-size:1.75rem;font-weight:800;background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-  .stat-label{font-size:.75rem;color:var(--muted);margin-top:.25rem;text-transform:uppercase;letter-spacing:.05em}
+  .stat-card{background:var(--card-2);border:1px solid var(--border);border-radius:8px;padding:1.1rem;text-align:left}
+  .stat-value{font-size:1.75rem;font-weight:850;color:var(--accent)}
+  .stat-label{font-size:.72rem;color:var(--muted);margin-top:.25rem;text-transform:uppercase}
   .price-input{display:flex;gap:.5rem;align-items:center}
   .price-input input{flex:1}
   .price-input span{color:var(--muted);font-size:.875rem;white-space:nowrap}
+  .path-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.5rem;align-items:center}
   .limit-row{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 80px;gap:.75rem;align-items:center;margin-bottom:.75rem}
   .limit-row.header{font-size:.75rem;color:var(--muted);text-transform:uppercase;font-weight:600;margin-bottom:.5rem}
   .limit-row input{width:100%}
   .vk-row{display:grid;grid-template-columns:1.5fr 2fr 1.5fr 1fr 1fr 100px 120px;gap:.75rem;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border)}
   .vk-row.header{font-size:.75rem;color:var(--muted);text-transform:uppercase;font-weight:600;border-bottom:2px solid var(--border)}
-  .tag{font-size:.75rem;padding:.125rem .375rem;border-radius:.25rem;background:#334155;color:var(--text)}
-  .tag-disabled{background:#451a1a;color:#fca5a5}
+  .tag{font-size:.75rem;padding:.125rem .375rem;border-radius:4px;background:var(--card-2);border:1px solid var(--border);color:var(--text)}
+  .tag-disabled{background:#3c1e1d;color:#fca5a5}
   /* Provider cards */
   .provider-grid{display:grid;grid-template-columns:1fr;gap:1rem}
-  .provider-card{background:var(--card);border:1px solid var(--border);border-radius:.75rem;overflow:hidden}
-  .provider-header{padding:1rem 1.25rem;background:linear-gradient(90deg,rgba(56,189,248,.1),rgba(129,140,248,.1));display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)}
+  .provider-card{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:var(--shadow)}
+  .provider-header{padding:1rem 1.25rem;background:rgba(87,214,179,.06);display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)}
   .provider-header h3{font-size:1rem;font-weight:700}
   .provider-meta{padding:.75rem 1.25rem;font-size:.875rem;color:var(--muted);display:flex;gap:1.5rem;flex-wrap:wrap;border-bottom:1px solid var(--border)}
   .provider-meta span{display:flex;align-items:center;gap:.25rem}
@@ -82,33 +98,92 @@
   /* Conversation detail modal */
   .conv-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;align-items:center;justify-content:center}
   .conv-modal.active{display:flex}
-  .conv-box{background:var(--card);border:1px solid var(--border);border-radius:.75rem;width:95%;max-width:1400px;max-height:92vh;display:flex;flex-direction:column;padding:1.25rem 1.5rem 1.5rem}
+  .conv-box{background:var(--card);border:1px solid var(--border);border-radius:8px;width:min(96vw,1440px);height:92vh;max-height:920px;display:flex;flex-direction:column;padding:1.25rem 1.5rem 1.5rem;box-shadow:var(--shadow)}
   .conv-box .modal-header{margin-bottom:.75rem;flex-shrink:0}
-  .conv-meta{font-size:.8125rem;color:var(--muted);margin-bottom:.75rem;padding-bottom:.5rem;border-bottom:1px solid var(--border);flex-shrink:0}
+  .conv-meta{font-size:.8125rem;color:var(--muted);margin-bottom:.75rem;padding-bottom:.75rem;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;flex-direction:column;gap:.7rem}
+  .conv-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.7rem}
+  .conv-metric{background:var(--card-2);border:1px solid var(--border);border-radius:8px;padding:.75rem;min-width:0}
+  .conv-metric-label{font-size:.68rem;color:var(--muted);text-transform:uppercase;font-weight:750;margin-bottom:.2rem}
+  .conv-metric-value{font-size:1.05rem;color:var(--text);font-weight:820;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .conv-flow{display:grid;grid-template-columns:minmax(72px,auto) 1fr minmax(72px,auto);align-items:center;gap:.6rem}
+  .conv-flow-label{font-size:.72rem;color:var(--muted);font-weight:700}
+  .conv-flow-label.right{text-align:right}
+  .conv-flow-bar{height:10px;background:var(--input);border:1px solid var(--border);border-radius:999px;overflow:hidden;display:flex}
+  .conv-flow-fill.input{background:var(--accent)}
+  .conv-flow-fill.output{background:var(--accent2)}
+  .conv-meta-line{display:flex;gap:.45rem;flex-wrap:wrap}
+  .conv-pill{background:rgba(87,214,179,.08);border:1px solid var(--border);border-radius:999px;padding:.18rem .55rem;color:var(--muted);font-size:.74rem}
+  .conv-reader-shell{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:1rem;align-items:start}
+  .conv-doc{background:#f5f3ec;color:#20241f;border:1px solid #d7d0c0;border-radius:8px;padding:2.2rem 2.6rem;min-height:100%;box-shadow:0 18px 36px rgba(0,0,0,.18)}
+  .conv-doc-section{margin-bottom:2rem}
+  .conv-doc-section.compact{background:#ebe7dc;border:1px solid #d7d0c0;border-radius:8px;padding:1rem 1.1rem;max-height:260px;overflow:auto}
+  .conv-doc-label{font-size:.72rem;color:#747065;text-transform:uppercase;font-weight:800;margin-bottom:.75rem}
+  .md-body{font-family:Georgia,"Times New Roman","Songti SC",serif;font-size:1rem;line-height:1.82}
+  .md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:#111713;line-height:1.25;margin:1.4em 0 .55em;font-weight:820}
+  .md-body h1{font-size:2rem;border-bottom:1px solid #d7d0c0;padding-bottom:.4rem}
+  .md-body h2{font-size:1.45rem}
+  .md-body h3{font-size:1.15rem}
+  .md-body p{margin:.78em 0}
+  .md-body ul,.md-body ol{margin:.75em 0 .75em 1.4rem}
+  .md-body li{margin:.28rem 0}
+  .md-body blockquote{margin:1rem 0;padding:.7rem 1rem;border-left:4px solid #57a78f;background:#e8efe9;color:#3f4941}
+  .md-body code{font-family:"Cascadia Code",Consolas,monospace;background:#e4dfd2;border:1px solid #d4ccb9;border-radius:4px;padding:.08rem .28rem;font-size:.9em}
+  .md-body pre{background:#20241f;color:#eef3ef;border-radius:8px;padding:1rem;overflow:auto;line-height:1.55;margin:1rem 0}
+  .md-body pre code{background:transparent;border:none;color:inherit;padding:0}
+  .md-body table{min-width:0;width:100%;border-collapse:collapse;margin:1rem 0;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;font-size:.9rem}
+  .md-body th,.md-body td{border:1px solid #d7d0c0;padding:.45rem .55rem;color:#20241f}
+  .md-body th{background:#e7e1d2;color:#343931}
+  .math-inline{display:inline-flex;align-items:center;gap:.18rem;font-family:"Cambria Math","Times New Roman",serif;background:#ebe6d8;border:1px solid #d8cfbd;border-radius:4px;padding:.05rem .28rem;color:#151913}
+  .math-block{font-family:"Cambria Math","Times New Roman",serif;background:#ebe6d8;border:1px solid #d8cfbd;border-radius:8px;padding:1rem;margin:1rem 0;text-align:center;font-size:1.12rem;overflow:auto;color:#151913}
+  .math-frac{display:inline-grid;grid-template-rows:auto auto;vertical-align:middle;text-align:center;line-height:1.1;margin:0 .12rem}
+  .math-frac span:first-child{border-bottom:1px solid currentColor;padding:0 .18rem}
+  .math-frac span:last-child{padding:0 .18rem}
+  .conv-outline{position:sticky;top:0;background:var(--card-2);border:1px solid var(--border);border-radius:8px;padding:.9rem;max-height:calc(92vh - 210px);overflow:auto}
+  .conv-outline-title{font-size:.72rem;color:var(--muted);text-transform:uppercase;font-weight:800;margin-bottom:.65rem}
+  .conv-outline a{display:block;color:var(--muted);text-decoration:none;font-size:.8rem;line-height:1.35;padding:.28rem .35rem;border-radius:5px;border-left:2px solid transparent}
+  .conv-outline a:hover{color:var(--accent);background:rgba(87,214,179,.08);border-left-color:var(--accent)}
+  .conv-outline .level-2{padding-left:.9rem}
+  .conv-outline .level-3,.conv-outline .level-4,.conv-outline .level-5,.conv-outline .level-6{padding-left:1.45rem}
+  .conv-outline-empty{color:var(--muted);font-size:.8rem;line-height:1.5}
   .conv-tabs{display:flex;gap:.5rem;margin-bottom:.75rem;flex-shrink:0}
   .conv-tab{cursor:pointer;padding:.375rem .875rem;border:1px solid var(--border);border-radius:.375rem;background:transparent;color:var(--muted);font-size:.8rem;font-weight:500;transition:.2s}
   .conv-tab:hover{color:var(--text);border-color:var(--accent)}
-  .conv-tab.active{background:var(--accent);color:#0f172a;border-color:var(--accent);font-weight:600}
-  .conv-body{flex:1;min-height:0;overflow:hidden}
-  .conv-layout{display:none;height:100%;gap:1rem}
+  .conv-tab.active{background:var(--accent);color:var(--tab-active-text);border-color:var(--accent);font-weight:600}
+  .conv-body{flex:1;min-height:0;overflow:auto;padding-right:.25rem;scrollbar-gutter:stable}
+  .conv-layout{display:none;gap:1rem;min-height:100%}
   .conv-layout.active{display:flex}
-  .conv-layout.stack{flex-direction:column}
-  .conv-layout.side{flex-direction:row}
+  .conv-layout.reader.active{display:block}
+  .conv-layout.stack{flex-direction:column;min-height:auto}
+  .conv-layout.side{height:100%;min-height:0}
+  .conv-layout.side.active{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   .conv-layout.single .conv-panel{width:100%}
-  .conv-panel{flex:1;min-width:0;display:flex;flex-direction:column}
-  .conv-panel-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.375rem;flex-shrink:0}
-  .conv-panel-title{font-weight:600;font-size:.875rem;color:var(--text)}
+  .conv-panel{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:rgba(255,255,255,.025);border:1px solid var(--border);border-radius:8px;padding:.75rem;box-shadow:inset 3px 0 0 var(--panel-accent,var(--accent))}
+  .conv-panel.request{--panel-accent:var(--accent)}
+  .conv-panel.response{--panel-accent:var(--accent2)}
+  .conv-layout.stack .conv-panel{flex:0 0 auto;min-height:420px}
+  .conv-layout.side .conv-panel,.conv-layout.single .conv-panel{height:100%}
+  .conv-panel-header{display:flex;justify-content:space-between;align-items:center;gap:.75rem;margin-bottom:.65rem;flex-shrink:0;padding-bottom:.55rem;border-bottom:1px solid var(--border)}
+  .conv-panel-title{font-weight:750;font-size:.875rem;color:var(--text);display:flex;align-items:center;gap:.45rem}
+  .conv-panel-dot{width:.55rem;height:.55rem;border-radius:50%;background:var(--panel-accent,var(--accent));box-shadow:0 0 0 4px color-mix(in srgb,var(--panel-accent,var(--accent)) 16%,transparent)}
   .conv-panel-stat{font-size:.75rem;color:var(--muted);margin-left:.5rem;font-weight:400}
   .conv-copy-btn{font-size:.75rem;padding:.25rem .5rem;background:var(--border);border:none;border-radius:.25rem;color:var(--text);cursor:pointer;transition:.2s}
-  .conv-copy-btn:hover{background:var(--accent);color:#0f172a}
-  .conv-pre-wrap{background:#0b1220;border:1px solid var(--border);border-radius:.5rem;padding:.75rem;overflow:auto;flex:1;font-size:.8125rem;line-height:1.6}
+  .conv-copy-btn:hover{background:var(--accent);color:var(--tab-active-text)}
+  .conv-pre-wrap{background:var(--input);border:1px solid var(--border);border-radius:6px;padding:.75rem;overflow:auto;flex:1;font-size:.8125rem;line-height:1.6}
   .conv-pre-wrap pre{margin:0;font-family:'SF Mono',Monaco,'Cascadia Code','Roboto Mono',Consolas,'Courier New',monospace;white-space:pre-wrap;word-break:break-word}
   .hljs-key{color:#93c5fd}
   .hljs-string{color:#86efac}
   .hljs-number{color:#fca5a5}
   .hljs-boolean{color:#fbbf24}
   .hljs-null{color:#f472b6}
-  @media(max-width:1100px){.conv-layout.side{flex-direction:column}.conv-box{width:98%;padding:1rem}}
+  .theme-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.45rem;background:var(--input);border:1px solid var(--border);border-radius:8px;padding:.3rem}
+  .theme-option{width:100%;border:1px solid transparent;background:transparent;color:var(--muted);border-radius:6px;padding:.7rem .55rem;cursor:pointer;font-weight:750;font-size:.84rem;display:flex;align-items:center;justify-content:center;gap:.35rem;transition:.18s}
+  .theme-option:hover{color:var(--text);background:var(--card-2)}
+  .theme-option.active{background:var(--accent);border-color:var(--accent);color:var(--tab-active-text);box-shadow:0 8px 18px rgba(20,125,101,.16)}
+  .theme-option:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .theme-preview{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-top:.7rem}
+  .theme-swatch{height:34px;border-radius:6px;border:1px solid var(--border);background:linear-gradient(135deg,var(--card) 0 34%,var(--card-2) 34% 67%,var(--accent) 67% 100%)}
+  @media(max-width:1100px){.conv-layout.side.active{display:flex;flex-direction:column;height:auto}.conv-layout.side .conv-panel{height:auto;min-height:420px}.conv-box{width:98%;padding:1rem}.conv-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.conv-reader-shell{grid-template-columns:1fr}.conv-outline{position:relative;max-height:none;order:-1}}
+  @media(max-width:720px){header{padding:.85rem 1rem;align-items:flex-start;gap:.75rem;flex-direction:column}.container{padding:1rem}.actions{justify-content:flex-start;flex-wrap:wrap}.path-control{grid-template-columns:1fr}.path-control .btn{justify-content:center}.provider-header{align-items:flex-start;gap:.75rem;flex-direction:column}.limit-row,.vk-row{grid-template-columns:1fr}.vk-row.header,.limit-row.header{display:none}.conv-summary{grid-template-columns:1fr}.conv-flow{grid-template-columns:1fr}.conv-flow-label.right{text-align:left}.conv-doc{padding:1.2rem}.md-body{font-size:.95rem}}
 </style>
 </head>
 <body>
@@ -138,9 +213,10 @@
       <h2 style="font-size:1.125rem">服务商列表 <span class="badge" id="providerCount">0</span></h2>
       <button class="btn btn-primary" onclick="openProviderModal()">+ 添加服务商</button>
     </div>
+    <p style="color:var(--muted);font-size:.84rem;margin:-.4rem 0 1rem">供应商自带 Web Search 会随请求体透明转发，例如 OpenAI Responses 的 <code>web_search_preview</code>、Chat Completions 的 <code>web_search_options</code>、Anthropic Messages 的 <code>web_search_20250305</code>。</p>
     <div class="provider-grid" id="providerGrid"></div>
     <div style="display:flex;justify-content:flex-end;margin-top:1rem">
-      <button class="btn btn-primary" onclick="saveConfig()">💾 保存模型配置</button>
+      <button class="btn btn-primary" onclick="saveConfig()">保存模型配置</button>
     </div>
     <div class="grid" style="margin-top:1.25rem">
       <div class="card">
@@ -257,7 +333,8 @@
         </div>
         <div id="convMetaInfo" class="conv-meta"></div>
         <div class="conv-tabs">
-          <button class="conv-tab active" data-mode="side" onclick="setConvLayout('side')">左右分栏</button>
+          <button class="conv-tab active" data-mode="reader" onclick="setConvLayout('reader')">阅读视图</button>
+          <button class="conv-tab" data-mode="side" onclick="setConvLayout('side')">左右分栏</button>
           <button class="conv-tab" data-mode="stack" onclick="setConvLayout('stack')">上下堆叠</button>
           <button class="conv-tab" data-mode="input" onclick="setConvLayout('input')">只看请求</button>
           <button class="conv-tab" data-mode="output" onclick="setConvLayout('output')">只看响应</button>
@@ -292,6 +369,19 @@
         <div class="actions"><button class="btn btn-primary" onclick="changePassword()">修改密码</button></div>
       </div>
       <div class="card">
+        <h2>界面偏好</h2>
+        <div class="form-group">
+          <label>颜色主题</label>
+          <div class="theme-options" id="themeModeControl" role="group" aria-label="颜色主题">
+            <button type="button" class="theme-option" data-theme-mode="system" onclick="setThemeMode('system')">跟随系统</button>
+            <button type="button" class="theme-option" data-theme-mode="light" onclick="setThemeMode('light')">白天</button>
+            <button type="button" class="theme-option" data-theme-mode="dark" onclick="setThemeMode('dark')">黑夜</button>
+          </div>
+          <div class="theme-preview" aria-hidden="true"><span class="theme-swatch"></span><span class="theme-swatch"></span><span class="theme-swatch"></span></div>
+          <p class="hint">主题设置仅保存在当前浏览器；“跟随系统”会随 Windows 或浏览器深浅色设置自动切换。</p>
+        </div>
+      </div>
+      <div class="card">
         <h2>对话存储配置</h2>
         <p style="color:var(--muted);font-size:.875rem;margin-bottom:.75rem">开启后会保存每个请求的完整输入/输出到指定目录（仅保存代理通过的请求）。</p>
         <div class="form-group">
@@ -299,17 +389,20 @@
         </div>
         <div class="form-group">
           <label>保存目录（绝对路径）</label>
-          <input type="text" id="convDirectory" placeholder="例如: D:\\litellm-conversations">
+          <div class="path-control">
+            <input type="text" id="convDirectory" placeholder="例如: D:\\litellm-conversations">
+            <button type="button" class="btn btn-secondary" id="openConvFolderBtn" onclick="openConversationFolder()">打开文件夹</button>
+          </div>
           <p class="hint">目录不存在会自动创建。留空则不保存。</p>
         </div>
         <div class="actions"><button class="btn btn-primary" onclick="saveConversationStorage()">保存配置</button></div>
       </div>
       <div class="card">
         <h2>代理端点</h2>
-        <p style="color:var(--muted);font-size:.875rem;margin-bottom:.75rem">带用量统计 + 限额 + 密钥校验：</p>
-        <div class="yaml-preview">http://localhost:8080/proxy/v1/chat/completions</div>
-        <p style="color:var(--muted);font-size:.875rem;margin-top:.75rem">直接走 LiteLLM（无统计）：</p>
-        <div class="yaml-preview">http://localhost:4000/v1/chat/completions</div>
+        <p style="color:var(--muted);font-size:.875rem;margin-bottom:.75rem">统一代理服务，带用量统计 + 限额 + 密钥校验：</p>
+        <div class="yaml-preview">http://localhost:18783/proxy/v1/chat/completions</div>
+        <p style="color:var(--muted);font-size:.875rem;margin-top:.75rem">兼容无 /proxy 前缀：</p>
+        <div class="yaml-preview">http://localhost:18783/v1/chat/completions</div>
       </div>
     </div>
   </div>
@@ -339,12 +432,12 @@
       <input type="text" id="pUACustom" style="display:none;margin-top:.5rem" placeholder="输入自定义 User-Agent">
     </div>
     <div class="form-group">
-      <button class="btn btn-warn" id="testProviderBtn" onclick="testProvider()">🔌 测试连通性并获取模型</button>
+      <button class="btn btn-warn" id="testProviderBtn" onclick="testProvider()">测试连通性并获取模型</button>
       <div id="testResult" style="margin-top:.5rem;font-size:.875rem"></div>
     </div>
     <div id="fetchedModels" style="display:none;margin-bottom:1rem">
       <div style="font-size:.875rem;font-weight:600;margin-bottom:.5rem">获取到的模型（勾选要添加的）</div>
-      <div id="fetchedModelsList" style="max-height:200px;overflow:auto;border:1px solid var(--border);border-radius:.5rem;padding:.5rem;background:#0f172a"></div>
+      <div id="fetchedModelsList" style="max-height:200px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:.5rem;background:var(--input)"></div>
       <div style="margin-top:.5rem;display:flex;gap:.5rem">
         <button class="btn btn-sm" onclick="selectAllFetched(true)">全选</button>
         <button class="btn btn-sm" onclick="selectAllFetched(false)">全不选</button>
@@ -364,11 +457,11 @@
     <div class="form-group">
       <label>允许模型</label>
       <div style="display:flex;gap:.5rem;margin-bottom:.5rem">
-        <button class="btn btn-sm btn-primary" onclick="detectModels()">🔍 探测供应商可用模型</button>
+        <button class="btn btn-sm btn-primary" onclick="detectModels()">探测供应商可用模型</button>
         <button class="btn btn-sm" onclick="toggleAllDetected(true)">全选</button>
         <button class="btn btn-sm" onclick="toggleAllDetected(false)">全不选</button>
       </div>
-      <div id="vkModelsContainer" style="max-height:200px;overflow:auto;border:1px solid var(--border);border-radius:.5rem;padding:.5rem;background:#0f172a">
+      <div id="vkModelsContainer" style="max-height:200px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:.5rem;background:var(--input)">
         <div style="color:var(--muted);font-size:.875rem;padding:.5rem">点击上方按钮获取真实可用模型列表</div>
       </div>
       <div class="hint">通过真实 API Key 向供应商查询的可用模型。不选 = 允许全部。</div>
@@ -383,7 +476,7 @@
 
 <div class="toast" id="toast">保存成功</div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+<script src="/vendor/js-yaml/js-yaml.min.js"></script>
 <script>
 const token = localStorage.getItem('litellm_token');
 if (!token) window.location.href = '/login.html';
@@ -392,6 +485,53 @@ let config = { providers: [], pricing: {}, limits: {}, virtual_keys: [], router_
 let editingProviderIndex = -1, editingModelIndex = -1, editingVkIndex = -1;
 let detectedModels = [];
 let providerTested = false, providerTestedModels = [], providerOriginalKey = '', providerOriginalBase = '';  // for provider modal
+const THEME_STORAGE_KEY = 'litellm_theme_mode';
+const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+let themeControlsBound = false;
+
+function getThemeMode() {
+  const mode = localStorage.getItem(THEME_STORAGE_KEY) || 'system';
+  return ['system', 'light', 'dark'].includes(mode) ? mode : 'system';
+}
+
+function resolveThemeMode(mode) {
+  if (mode === 'light' || mode === 'dark') return mode;
+  return themeMedia?.matches ? 'dark' : 'light';
+}
+
+function updateThemeControl(mode = getThemeMode()) {
+  document.querySelectorAll('[data-theme-mode]').forEach(btn => {
+    const active = btn.dataset.themeMode === mode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
+function applyThemeMode(mode = getThemeMode()) {
+  const normalized = ['system', 'light', 'dark'].includes(mode) ? mode : 'system';
+  document.documentElement.dataset.themeMode = normalized;
+  document.documentElement.dataset.theme = resolveThemeMode(normalized);
+  updateThemeControl(normalized);
+}
+
+function setThemeMode(mode) {
+  const normalized = ['system', 'light', 'dark'].includes(mode) ? mode : 'system';
+  localStorage.setItem(THEME_STORAGE_KEY, normalized);
+  applyThemeMode(normalized);
+}
+
+function initThemeControls() {
+  updateThemeControl(getThemeMode());
+  if (themeControlsBound) return;
+  themeControlsBound = true;
+  if (themeMedia) {
+    const onSystemThemeChange = () => {
+      if (getThemeMode() === 'system') applyThemeMode('system');
+    };
+    if (typeof themeMedia.addEventListener === 'function') themeMedia.addEventListener('change', onSystemThemeChange);
+    else if (typeof themeMedia.addListener === 'function') themeMedia.addListener(onSystemThemeChange);
+  }
+}
 
 async function api(path, opts = {}) {
   opts.headers = opts.headers || {};
@@ -409,6 +549,8 @@ async function load() {
   renderLimits();
   renderVirtualKeys();
   applyLogColState();
+  applyThemeMode();
+  initThemeControls();
   document.querySelectorAll('.log-col-toggle').forEach(cb => cb.addEventListener('change', () => { saveLogColState(); loadUsage(); }));
   // Init conversation storage settings
   const cs = config.conversation_storage || { enabled: false, directory: '' };
@@ -454,20 +596,20 @@ function renderProviders() {
     card.className = 'provider-card';
     const keyMasked = prov.api_key ? (prov.api_key.startsWith('os.environ/') ? prov.api_key : prov.api_key.slice(0, 8) + '****' + prov.api_key.slice(-4)) : '-';
     const modelsHtml = (prov.models || []).map((m, mi) => {
-      return `<tr><td><strong>${m.model_name}</strong></td><td><button class="btn btn-sm btn-danger" onclick="deleteModel(${pi},${mi})">删除</button></td></tr>`;
+      return `<tr><td><strong>${escapeHtml(m.model_name)}</strong></td><td><button class="btn btn-sm btn-danger" onclick="deleteModel(${pi},${mi})">删除</button></td></tr>`;
     }).join('');
     card.innerHTML = `
       <div class="provider-header">
-        <div><h3>${prov.name}</h3><span class="badge">${prov.type}</span></div>
+        <div><h3>${escapeHtml(prov.name)}</h3><span class="badge">${escapeHtml(prov.type)}</span></div>
         <div style="display:flex;gap:.5rem">
           <button class="btn btn-sm btn-primary" onclick="editProvider(${pi})">编辑</button>
           <button class="btn btn-sm btn-danger" onclick="deleteProvider(${pi})">删除</button>
         </div>
       </div>
       <div class="provider-meta">
-        <span>🔗 ${prov.base_url || '默认'}</span>
-        <span>🔑 ${keyMasked}</span>
-        <span>🌐 ${prov.user_agent || 'OpenClaw-Gateway/1.0'}</span>
+        <span>URL ${escapeHtml(prov.base_url || '默认')}</span>
+        <span>Key ${escapeHtml(keyMasked)}</span>
+        <span>UA ${escapeHtml(prov.user_agent || 'OpenClaw-Gateway/1.0')}</span>
       </div>
       <div class="provider-models">
         <table><thead><tr><th>模型别名</th><th>操作</th></tr></thead><tbody>${modelsHtml || '<tr><td colspan="2" style="color:var(--muted)">暂无模型，编辑后测试连通性可自动获取</td></tr>'}</tbody></table>
@@ -476,7 +618,10 @@ function renderProviders() {
     grid.appendChild(card);
   });
   document.getElementById('jsonEditor').value = JSON.stringify(config, null, 2);
-  document.getElementById('yamlPreview').textContent = jsyaml.dump(flattenForYAML(config), { lineWidth: -1 });
+  const yamlPreview = document.getElementById('yamlPreview');
+  yamlPreview.textContent = window.jsyaml
+    ? jsyaml.dump(flattenForYAML(config), { lineWidth: -1 })
+    : JSON.stringify(flattenForYAML(config), null, 2);
 }
 
 function flattenForYAML(cfg) {
@@ -523,7 +668,7 @@ function resetProviderTestState() {
   document.getElementById('fetchedModels').style.display = 'none';
   document.getElementById('fetchedModelsList').innerHTML = '';
   document.getElementById('testProviderBtn').disabled = false;
-  document.getElementById('testProviderBtn').textContent = '🔌 测试连通性并获取模型';
+  document.getElementById('testProviderBtn').textContent = '测试连通性并获取模型';
 }
 function openProviderModal() {
   editingProviderIndex = -1;
@@ -549,7 +694,7 @@ function editProvider(i) {
   document.getElementById('pBase').value = prov.base_url || '';
   document.getElementById('pKey').value = prov.api_key;
   setUAValue(prov.user_agent || 'OpenClaw-Gateway/1.0');
-  document.getElementById('testResult').innerHTML = '<span style="color:var(--ok)">✓ 已验证渠道</span>';
+  document.getElementById('testResult').innerHTML = '<span style="color:var(--ok)">已验证渠道</span>';
   document.getElementById('fetchedModels').style.display = 'none';
   document.getElementById('providerModal').classList.add('active');
 }
@@ -573,21 +718,21 @@ async function testProvider() {
     if (data.success) {
       providerTested = true;
       providerTestedModels = data.models || [];
-      resultDiv.innerHTML = `<span style="color:var(--ok)">✓ 连通成功！获取到 ${data.models.length} 个模型</span>`;
+      resultDiv.innerHTML = `<span style="color:var(--ok)">连通成功，获取到 ${data.models.length} 个模型</span>`;
       renderFetchedModels(data.models);
       document.getElementById('fetchedModels').style.display = 'block';
     } else {
       providerTested = false;
-      resultDiv.innerHTML = `<span style="color:var(--danger)">✗ 测试失败: ${data.error || '未知错误'}</span>`;
+      resultDiv.innerHTML = `<span style="color:var(--danger)">测试失败: ${escapeHtml(data.error || '未知错误')}</span>`;
       document.getElementById('fetchedModels').style.display = 'none';
     }
   } catch (e) {
     providerTested = false;
-    resultDiv.innerHTML = `<span style="color:var(--danger)">✗ 请求异常: ${e.message}</span>`;
+    resultDiv.innerHTML = `<span style="color:var(--danger)">请求异常: ${escapeHtml(e.message)}</span>`;
     document.getElementById('fetchedModels').style.display = 'none';
   }
   btn.disabled = false;
-  btn.textContent = '🔌 测试连通性并获取模型';
+  btn.textContent = '测试连通性并获取模型';
 }
 function renderFetchedModels(models) {
   const container = document.getElementById('fetchedModelsList');
@@ -596,7 +741,7 @@ function renderFetchedModels(models) {
   models.forEach(m => {
     const div = document.createElement('label');
     div.style.cssText = 'display:flex;align-items:center;gap:.5rem;padding:.25rem 0;cursor:pointer;font-size:.875rem';
-    div.innerHTML = `<input type="checkbox" class="fetched-model-cb" value="${m.id}" checked> <span><strong>${m.id}</strong> <span style="color:var(--muted);font-size:.75rem">${m.owned_by || ''}</span></span>`;
+    div.innerHTML = `<input type="checkbox" class="fetched-model-cb" value="${escapeAttr(m.id)}" checked> <span><strong>${escapeHtml(m.id)}</strong> <span style="color:var(--muted);font-size:.75rem">${escapeHtml(m.owned_by || '')}</span></span>`;
     container.appendChild(div);
   });
 }
@@ -656,19 +801,8 @@ async function saveConfig() {
   const res = await api('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) });
   const data = await res.json();
   if (data.success) {
-    toast('配置已保存，正在重启代理...');
+    toast('配置已保存，立即生效');
     load();
-    // Restart LiteLLM proxy to pick up new litellm-config.yaml
-    setTimeout(async () => {
-      try {
-        const r2 = await api('/api/restart-proxy', { method: 'POST' });
-        const d2 = await r2.json();
-        if (d2.success) { toast('代理已重启 (PID: ' + d2.pid + ')'); }
-        else { toast('代理重启失败: ' + (d2.error || '未知错误')); }
-      } catch (e) {
-        toast('代理重启请求失败');
-      }
-    }, 500);
   } else {
     alert('保存失败: ' + (data.error || '未知错误'));
   }
@@ -682,7 +816,7 @@ function renderPricing() {
     const name = item.model_name;
     const p = config.pricing[name] || { input: 0, cached_input: 0, cached_write: 0, output: 0 };
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td><strong>${name}</strong> <span style="color:var(--muted);font-size:.75rem">(${item.provider_name})</span></td><td><div class="price-input"><input type="number" step="0.01" data-model="${name}" data-type="input" value="${p.input || 0}"><span>元/1M</span></div></td><td><div class="price-input"><input type="number" step="0.01" data-model="${name}" data-type="cached_input" value="${p.cached_input || 0}"><span>元/1M</span></div></td><td><div class="price-input"><input type="number" step="0.01" data-model="${name}" data-type="cached_write" value="${p.cached_write || 0}"><span>元/1M</span></div></td><td><div class="price-input"><input type="number" step="0.01" data-model="${name}" data-type="output" value="${p.output || 0}"><span>元/1M</span></div></td>`;
+    tr.innerHTML = `<td><strong>${escapeHtml(name)}</strong> <span style="color:var(--muted);font-size:.75rem">(${escapeHtml(item.provider_name)})</span></td><td><div class="price-input"><input type="number" step="0.01" data-model="${escapeAttr(name)}" data-type="input" value="${p.input || 0}"><span>元/1M</span></div></td><td><div class="price-input"><input type="number" step="0.01" data-model="${escapeAttr(name)}" data-type="cached_input" value="${p.cached_input || 0}"><span>元/1M</span></div></td><td><div class="price-input"><input type="number" step="0.01" data-model="${escapeAttr(name)}" data-type="cached_write" value="${p.cached_write || 0}"><span>元/1M</span></div></td><td><div class="price-input"><input type="number" step="0.01" data-model="${escapeAttr(name)}" data-type="output" value="${p.output || 0}"><span>元/1M</span></div></td>`;
     tbody.appendChild(tr);
   });
 }
@@ -709,7 +843,7 @@ function renderLimits() {
     const l = limits[name] || { rpm: '', budget: '' };
     const row = document.createElement('div');
     row.className = 'limit-row';
-    row.innerHTML = `<div><strong>${name}</strong> <span style="color:var(--muted);font-size:.75rem">(${item.provider_name})</span></div><div><input type="number" data-limit-model="${name}" data-limit-type="rpm" value="${l.rpm || ''}" placeholder="不限"></div><div><input type="number" step="0.01" data-limit-model="${name}" data-limit-type="budget" value="${l.budget || ''}" placeholder="不限"></div><div></div><div></div><div></div>`;
+    row.innerHTML = `<div><strong>${escapeHtml(name)}</strong> <span style="color:var(--muted);font-size:.75rem">(${escapeHtml(item.provider_name)})</span></div><div><input type="number" data-limit-model="${escapeAttr(name)}" data-limit-type="rpm" value="${l.rpm || ''}" placeholder="不限"></div><div><input type="number" step="0.01" data-limit-model="${escapeAttr(name)}" data-limit-type="budget" value="${l.budget || ''}" placeholder="不限"></div><div></div><div></div><div></div>`;
     container.appendChild(row);
   });
 }
@@ -741,9 +875,9 @@ function renderVirtualKeys() {
   keys.forEach((k, i) => {
     const row = document.createElement('div');
     row.className = 'vk-row';
-    const models = k.allowed_models && k.allowed_models.length ? k.allowed_models.map(m => `<span class="tag">${m}</span>`).join(' ') : '<span class="tag">全部</span>';
+    const models = k.allowed_models && k.allowed_models.length ? k.allowed_models.map(m => `<span class="tag">${escapeHtml(m)}</span>`).join(' ') : '<span class="tag">全部</span>';
     const status = k.enabled !== false ? '<span class="tag">启用</span>' : '<span class="tag tag-disabled">禁用</span>';
-    row.innerHTML = `<div>${k.name}</div><div><code>${k.key}</code></div><div>${models}</div><div>${k.budget || '无限制'}</div><div>${k.rpm || '无限制'}</div><div>${status}</div><div><button class="btn btn-sm btn-primary" onclick="editVk(${i})">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteVk(${i})">删除</button></div>`;
+    row.innerHTML = `<div>${escapeHtml(k.name)}</div><div><code>${escapeHtml(k.key)}</code></div><div>${models}</div><div>${escapeHtml(k.budget || '无限制')}</div><div>${escapeHtml(k.rpm || '无限制')}</div><div>${status}</div><div><button class="btn btn-sm btn-primary" onclick="editVk(${i})">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteVk(${i})">删除</button></div>`;
     container.appendChild(row);
   });
 }
@@ -756,9 +890,9 @@ function renderVkModelSelector(selectedModels = []) {
     localDiv.innerHTML = '<div style="font-size:.75rem;color:var(--muted);margin-bottom:.25rem">已配置模型</div>';
     models.forEach(m => {
       const prefix = m.provider_type === 'gemini' ? 'gemini/' : m.provider_type === 'anthropic' ? 'anthropic/' : 'openai/';
-      const label = `${m.model_name} → ${prefix}${m.model_id} <span style="color:var(--muted)">(${m.provider_name})</span>`;
+      const label = `${escapeHtml(m.model_name)} → ${escapeHtml(prefix + m.model_id)} <span style="color:var(--muted)">(${escapeHtml(m.provider_name)})</span>`;
       const checked = selectedModels.includes(m.model_name) ? 'checked' : '';
-      localDiv.innerHTML += `<label style="display:flex;align-items:center;gap:.5rem;padding:.25rem 0;cursor:pointer;font-size:.875rem"><input type="checkbox" class="vk-model-cb" value="${m.model_name}" ${checked}> <span>${label}</span></label>`;
+      localDiv.innerHTML += `<label style="display:flex;align-items:center;gap:.5rem;padding:.25rem 0;cursor:pointer;font-size:.875rem"><input type="checkbox" class="vk-model-cb" value="${escapeAttr(m.model_name)}" ${checked}> <span>${label}</span></label>`;
     });
     container.appendChild(localDiv);
   }
@@ -771,7 +905,7 @@ function renderVkModelSelector(selectedModels = []) {
       const val = dm.local_alias || `${dm.provider}/${dm.id}`;
       const checked = selectedModels.includes(val) || selectedModels.includes(dm.local_alias) ? 'checked' : '';
       const unmapped = dm.local_alias ? '' : ' <span style="color:var(--warn);font-size:.75rem">(未配置)</span>';
-      detDiv.innerHTML += `<label style="display:flex;align-items:center;gap:.5rem;padding:.25rem 0;cursor:pointer;font-size:.875rem"><input type="checkbox" class="vk-model-cb" value="${val}" ${checked} ${dm.local_alias ? '' : 'disabled'}> <span>${display}</span>${unmapped}</label>`;
+      detDiv.innerHTML += `<label style="display:flex;align-items:center;gap:.5rem;padding:.25rem 0;cursor:pointer;font-size:.875rem"><input type="checkbox" class="vk-model-cb" value="${escapeAttr(val)}" ${checked} ${dm.local_alias ? '' : 'disabled'}> <span>${escapeHtml(display)}</span>${unmapped}</label>`;
     });
     container.appendChild(detDiv);
   }
@@ -846,19 +980,19 @@ async function deleteVk(i) { if (!confirm('确定删除此密钥？')) return; c
 // ---------- Usage ----------
 const LOG_COLUMNS = {
   time: { label: '时间', render: e => new Date(e.timestamp).toLocaleString() },
-  model: { label: '模型', render: e => e.model },
-  key: { label: '密钥', render: e => e.key_name || 'master' },
+  model: { label: '模型', render: e => escapeHtml(e.model || '-') },
+  key: { label: '密钥', render: e => escapeHtml(e.key_name || 'master') },
   input: { label: 'Input', render: e => e.input_tokens || 0 },
   cached: { label: '缓存', render: e => e.cached_tokens || 0 },
   cached_write: { label: '缓存写入', render: e => e.cached_write_tokens || 0 },
   output: { label: 'Output', render: e => e.output_tokens || 0 },
   cost: { label: '成本', render: e => '¥' + (e.cost || 0).toFixed(4) },
   status: { label: '状态', render: e => `<span style="color:${(e.status||200)>=400?'var(--danger)':'var(--success)'}">${e.status || '-'}</span>` },
-  duration: { label: '耗时', render: e => e.duration_ms + 'ms' },
+  duration: { label: '耗时', render: e => Number.isFinite(e.duration_ms) ? e.duration_ms + 'ms' : '-' },
   type: { label: '类型', render: e => e.stream ? 'Stream' : 'Sync' },
-  request_id: { label: '请求ID', render: e => `<span style="font-size:.7rem;color:var(--muted)">${e.request_id || '-'}</span>` },
-  ua: { label: 'UA', render: e => `<span style="font-size:.7rem;color:var(--muted);max-width:200px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(e.user_agent || '-').replace(/"/g, '&quot;')}">${e.user_agent || '-'}</span>` },
-  error: { label: '错误信息', render: e => e.error ? `<span style="color:var(--danger);font-size:.8rem">${e.error}</span>` : '-' }
+  request_id: { label: '请求ID', render: e => `<span style="font-size:.7rem;color:var(--muted)">${escapeHtml(e.request_id || '-')}</span>` },
+  ua: { label: 'UA', render: e => `<span style="font-size:.7rem;color:var(--muted);max-width:200px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeAttr(e.user_agent || '-')}">${escapeHtml(e.user_agent || '-')}</span>` },
+  error: { label: '错误信息', render: e => e.error ? `<span style="color:var(--danger);font-size:.8rem">${escapeHtml(e.error)}</span>` : '-' }
 };
 function getLogColState() {
   try { return JSON.parse(localStorage.getItem('usage_log_cols')); } catch {}
@@ -896,10 +1030,10 @@ async function loadUsage(page, pageSize) {
   document.getElementById('statCacheRate').textContent = stats.cacheHitRate + '%';
   const ubm = document.getElementById('usageByModel');
   ubm.innerHTML = '';
-  Object.entries(stats.byModel).forEach(([model, s]) => { const tr = document.createElement('tr'); tr.innerHTML = `<td>${model}</td><td>${s.requests}</td><td>${s.input_tokens.toLocaleString()}</td><td>${(s.cached_tokens || 0).toLocaleString()}</td><td>${s.output_tokens.toLocaleString()}</td><td>¥${s.cost.toFixed(4)}</td>`; ubm.appendChild(tr); });
+  Object.entries(stats.byModel).forEach(([model, s]) => { const tr = document.createElement('tr'); tr.innerHTML = `<td>${escapeHtml(model)}</td><td>${s.requests}</td><td>${s.input_tokens.toLocaleString()}</td><td>${(s.cached_tokens || 0).toLocaleString()}</td><td>${s.output_tokens.toLocaleString()}</td><td>¥${s.cost.toFixed(4)}</td>`; ubm.appendChild(tr); });
   const ubk = document.getElementById('usageByKey');
   ubk.innerHTML = '';
-  Object.entries(stats.byKey).forEach(([key, s]) => { const tr = document.createElement('tr'); tr.innerHTML = `<td>${key}</td><td>${s.requests}</td><td>¥${s.cost.toFixed(4)}</td>`; ubk.appendChild(tr); });
+  Object.entries(stats.byKey).forEach(([key, s]) => { const tr = document.createElement('tr'); tr.innerHTML = `<td>${escapeHtml(key)}</td><td>${s.requests}</td><td>¥${s.cost.toFixed(4)}</td>`; ubk.appendChild(tr); });
   // Render usage logs with column selector
   const activeCols = Array.from(document.querySelectorAll('.log-col-toggle')).filter(cb => cb.checked).map(cb => cb.value);
   const thead = document.getElementById('usageLogsHead');
@@ -918,12 +1052,15 @@ function renderPagination(containerId, pg, onPageChange, onPageSizeChange) {
   const el = document.getElementById(containerId);
   if (!el || !pg) return;
   const { page, pageSize, total, totalPages } = pg;
+  const totalText = pg.limited && pg.hiddenTotal
+    ? `显示最新 ${total.toLocaleString()} 条（已归档 ${pg.hiddenTotal.toLocaleString()} 条历史）/ ${totalPages} 页`
+    : `共 ${total.toLocaleString()} 条 / ${totalPages} 页`;
   let html = '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">';
   html += '<span style="font-size:.75rem;color:var(--muted)">每页</span>';
   html += `<select id="${containerId}_size" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:.25rem;padding:.25rem .5rem;font-size:.75rem">`;
   [10, 20, 50, 100].forEach(s => { html += `<option value="${s}"${s === pageSize ? ' selected' : ''}>${s}</option>`; });
   html += '</select>';
-  html += `<span style="font-size:.75rem;color:var(--muted)">共 ${total} 条 / ${totalPages} 页</span>`;
+  html += `<span style="font-size:.75rem;color:var(--muted)">${totalText}</span>`;
   html += '</div>';
   html += '<div style="display:flex;align-items:center;gap:.25rem;flex-wrap:wrap">';
   html += `<button class="btn btn-sm btn-secondary" id="${containerId}_prev">上一页</button>`;
@@ -1010,7 +1147,7 @@ async function loadConversations(page, pageSize) {
   const pagedEntries = allEntries.slice(offset, offset + convPageSize);
   let html = '<table><thead><tr><th>时间</th><th>模型</th><th>密钥</th><th>请求ID</th><th>操作</th></tr></thead><tbody>';
   for (const e of pagedEntries) {
-    html += `<tr><td>${new Date(e.timestamp).toLocaleString()}</td><td>${e.model}</td><td>${e.key_name || 'master'}</td><td><span style="font-size:.7rem;color:var(--muted)">${e.request_id}</span></td><td><button class="btn btn-sm btn-secondary" onclick="openConvDetail('${e.filename}')">查看</button> <button class="btn btn-sm btn-danger" onclick="deleteConversation('${e.filename}')">删除</button></td></tr>`;
+    html += `<tr><td>${new Date(e.timestamp).toLocaleString()}</td><td>${escapeHtml(e.model || '-')}</td><td>${escapeHtml(e.key_name || 'master')}</td><td><span style="font-size:.7rem;color:var(--muted)">${escapeHtml(e.request_id || '-')}</span></td><td><button class="btn btn-sm btn-secondary" data-filename="${escapeAttr(e.filename)}" onclick="openConvDetail(this.dataset.filename)">查看</button> <button class="btn btn-sm btn-danger" data-filename="${escapeAttr(e.filename)}" onclick="deleteConversation(this.dataset.filename)">删除</button></td></tr>`;
   }
   html += '</tbody></table>';
   listEl.innerHTML = html;
@@ -1019,8 +1156,16 @@ async function loadConversations(page, pageSize) {
 }
 function escapeHtml(text) {
   const div = document.createElement('div');
-  div.textContent = text;
+  div.textContent = text ?? '';
   return div.innerHTML;
+}
+function escapeAttr(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 function highlightJson(json) {
   if (typeof json !== 'string') json = JSON.stringify(json, null, 2);
@@ -1072,7 +1217,7 @@ function setConvLayout(mode) {
   document.querySelectorAll('.conv-layout').forEach(l => {
     l.classList.toggle('active', l.dataset.mode === mode);
   });
-  localStorage.setItem('conv_layout', mode);
+  localStorage.setItem('conv_layout_v2', mode);
 }
 async function copyToClipboard(text, btn) {
   try {
@@ -1082,41 +1227,270 @@ async function copyToClipboard(text, btn) {
     setTimeout(() => btn.textContent = orig, 1500);
   } catch(e) { alert('复制失败，请手动复制'); }
 }
+function formatCount(n) {
+  return Number(n || 0).toLocaleString();
+}
+function renderConvSummary(data, inputChars, outputChars, inputRaw, outputRaw) {
+  const totalChars = inputChars + outputChars;
+  const inputPct = totalChars ? Math.max(4, Math.round(inputChars / totalChars * 100)) : 50;
+  const outputPct = totalChars ? Math.max(4, 100 - inputPct) : 50;
+  const messages = Array.isArray(data.input?.messages) ? data.input.messages.length : 0;
+  const outputKind = outputRaw.trim().startsWith('{') || outputRaw.trim().startsWith('[') ? 'JSON' : (outputRaw ? 'Text / Stream' : 'Empty');
+  const requestId = data.request_id || '-';
+  return `
+    <div class="conv-summary">
+      <div class="conv-metric"><div class="conv-metric-label">Input</div><div class="conv-metric-value">${formatCount(inputChars)} 字符</div></div>
+      <div class="conv-metric"><div class="conv-metric-label">Output</div><div class="conv-metric-value">${formatCount(outputChars)} 字符</div></div>
+      <div class="conv-metric"><div class="conv-metric-label">Messages</div><div class="conv-metric-value">${formatCount(messages)}</div></div>
+      <div class="conv-metric"><div class="conv-metric-label">Format</div><div class="conv-metric-value">${escapeHtml(outputKind)}</div></div>
+    </div>
+    <div class="conv-flow" aria-label="输入输出字符占比">
+      <div class="conv-flow-label">Input ${inputPct}%</div>
+      <div class="conv-flow-bar">
+        <div class="conv-flow-fill input" style="width:${inputPct}%"></div>
+        <div class="conv-flow-fill output" style="width:${outputPct}%"></div>
+      </div>
+      <div class="conv-flow-label right">Output ${outputPct}%</div>
+    </div>
+    <div class="conv-meta-line">
+      <span class="conv-pill">模型 ${escapeHtml(data.model || '-')}</span>
+      <span class="conv-pill">密钥 ${escapeHtml(data.key_name || 'master')}</span>
+      <span class="conv-pill">UA ${escapeHtml(data.user_agent || '-')}</span>
+      <span class="conv-pill">请求ID ${escapeHtml(String(requestId).slice(0, 32))}</span>
+    </div>`;
+}
+function normalizeMessageContent(content) {
+  if (content == null) return '';
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map(part => {
+      if (typeof part === 'string') return part;
+      if (part?.type === 'text') return part.text || '';
+      if (part?.text) return part.text;
+      if (part?.content) return normalizeMessageContent(part.content);
+      return JSON.stringify(part, null, 2);
+    }).filter(Boolean).join('\n\n');
+  }
+  return JSON.stringify(content, null, 2);
+}
+function extractOutputText(data) {
+  const out = data.output;
+  if (out?.choices && Array.isArray(out.choices)) {
+    const parts = out.choices.map(choice => {
+      if (choice.message?.content) return normalizeMessageContent(choice.message.content);
+      if (choice.delta?.content) return normalizeMessageContent(choice.delta.content);
+      if (choice.text) return choice.text;
+      return '';
+    }).filter(Boolean);
+    if (parts.length) return parts.join('\n\n');
+  }
+  if (typeof out?.content === 'string') return out.content;
+  if (Array.isArray(out?.content)) return normalizeMessageContent(out.content);
+  if (typeof data.output_raw === 'string') {
+    const streamParts = [];
+    data.output_raw.split(/\r?\n/).forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) return;
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === '[DONE]') return;
+      try {
+        const chunk = JSON.parse(payload);
+        const delta = chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.message?.content || chunk.choices?.[0]?.text || '';
+        if (delta) streamParts.push(delta);
+      } catch {}
+    });
+    if (streamParts.length) return streamParts.join('');
+    return data.output_raw;
+  }
+  return out ? JSON.stringify(out, null, 2) : '';
+}
+function extractConversationText(data) {
+  const messages = Array.isArray(data.input?.messages) ? data.input.messages : [];
+  const input = messages.length
+    ? messages.map((m, i) => `### ${m.role || `Message ${i + 1}`}\n${normalizeMessageContent(m.content)}`).join('\n\n')
+    : normalizeMessageContent(data.input);
+  return { input, output: extractOutputText(data) };
+}
+function markdownHeadingId(prefix, lineIndex) {
+  return `${prefix}-heading-${lineIndex}`;
+}
+function buildMarkdownOutline(markdown, prefix = 'md') {
+  const headings = String(markdown || '').replace(/\r\n/g, '\n').split('\n').map((line, index) => {
+    const m = line.match(/^(#{1,6})\s+(.+)$/);
+    return m ? { level: m[1].length, title: m[2].replace(/[#*_`~]/g, '').trim(), id: markdownHeadingId(prefix, index) } : null;
+  }).filter(Boolean);
+  if (!headings.length) return '<div class="conv-outline-empty">未检测到 Markdown 标题。正文仍会按段落、列表、代码和公式渲染。</div>';
+  return headings.map(h => `<a class="level-${h.level}" href="#${h.id}">${escapeHtml(h.title)}</a>`).join('');
+}
+function renderMathFormula(formula, block = false) {
+  let html = escapeHtml(String(formula || '').trim());
+  const symbols = {
+    '\\alpha': 'α', '\\beta': 'β', '\\gamma': 'γ', '\\delta': 'δ', '\\epsilon': 'ε',
+    '\\theta': 'θ', '\\lambda': 'λ', '\\mu': 'μ', '\\pi': 'π', '\\sigma': 'σ',
+    '\\sum': '∑', '\\int': '∫', '\\infty': '∞', '\\times': '×', '\\cdot': '·',
+    '\\leq': '≤', '\\geq': '≥', '\\neq': '≠', '\\approx': '≈', '\\rightarrow': '→'
+  };
+  Object.entries(symbols).forEach(([tex, symbol]) => { html = html.split(tex).join(symbol); });
+  html = html.replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, '<span class="math-frac"><span>$1</span><span>$2</span></span>');
+  html = html.replace(/\^\{([^{}]+)\}/g, '<sup>$1</sup>').replace(/_\{([^{}]+)\}/g, '<sub>$1</sub>');
+  html = html.replace(/\^([A-Za-z0-9+\-=]+)/g, '<sup>$1</sup>').replace(/_([A-Za-z0-9+\-=]+)/g, '<sub>$1</sub>');
+  return block ? `<div class="math-block">${html}</div>` : `<span class="math-inline">${html}</span>`;
+}
+function renderInlineTextSegment(segment) {
+  return escapeHtml(segment)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/~~([^~]+)~~/g, '<del>$1</del>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+function renderInlineMarkdown(text) {
+  const source = String(text ?? '');
+  const tokenRe = /(`[^`]*`)|(\$([^$\n]+)\$)|(\\\(([\s\S]*?)\\\))/g;
+  let html = '', last = 0, m;
+  while ((m = tokenRe.exec(source)) !== null) {
+    html += renderInlineTextSegment(source.slice(last, m.index));
+    const token = m[0];
+    if (token.startsWith('`')) html += `<code>${escapeHtml(token.slice(1, -1))}</code>`;
+    else if (token.startsWith('$')) html += renderMathFormula(token.slice(1, -1));
+    else html += renderMathFormula(token.slice(2, -2));
+    last = tokenRe.lastIndex;
+  }
+  html += renderInlineTextSegment(source.slice(last));
+  return html;
+}
+function splitTableRow(row) {
+  return row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+}
+function isTableSeparator(line) {
+  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line || '');
+}
+function renderMarkdownDocument(markdown, prefix = 'md') {
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+  const blocks = [];
+  let para = [], list = null, inCode = false, code = [], inMath = false, math = [];
+  const flushPara = () => {
+    if (!para.length) return;
+    blocks.push(`<p>${para.map(renderInlineMarkdown).join('<br>')}</p>`);
+    para = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    const tag = list.type === 'ol' ? 'ol' : 'ul';
+    blocks.push(`<${tag}>${list.items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${tag}>`);
+    list = null;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (inCode) {
+      if (/^```/.test(trimmed)) { blocks.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`); inCode = false; code = []; }
+      else code.push(line);
+      continue;
+    }
+    if (inMath) {
+      if (trimmed === '$$' || trimmed === '\\]') { blocks.push(renderMathFormula(math.join('\n'), true)); inMath = false; math = []; }
+      else math.push(line);
+      continue;
+    }
+    if (/^```/.test(trimmed)) { flushPara(); flushList(); inCode = true; code = []; continue; }
+    if (trimmed === '$$' || trimmed === '\\[') { flushPara(); flushList(); inMath = true; math = []; continue; }
+    if (!trimmed) { flushPara(); flushList(); continue; }
+    if (line.includes('|') && isTableSeparator(lines[i + 1])) {
+      flushPara(); flushList();
+      const header = splitTableRow(line);
+      const rows = [];
+      i += 2;
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) { rows.push(splitTableRow(lines[i])); i++; }
+      i--;
+      blocks.push(`<table><thead><tr>${header.map(c => `<th>${renderInlineMarkdown(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${renderInlineMarkdown(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      flushPara(); flushList();
+      const level = heading[1].length;
+      blocks.push(`<h${level} id="${markdownHeadingId(prefix, i)}">${renderInlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+    const quote = line.match(/^>\s?(.*)$/);
+    if (quote) { flushPara(); flushList(); blocks.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`); continue; }
+    const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+    if (bullet || ordered) {
+      flushPara();
+      const type = ordered ? 'ol' : 'ul';
+      if (!list || list.type !== type) flushList();
+      if (!list) list = { type, items: [] };
+      list.items.push((bullet || ordered)[1]);
+      continue;
+    }
+    flushList();
+    para.push(line);
+  }
+  if (inCode) blocks.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
+  if (inMath) blocks.push(renderMathFormula(math.join('\n'), true));
+  flushPara(); flushList();
+  return `<div class="md-body">${blocks.join('\n') || '<p style="color:#747065">没有可渲染文本。</p>'}</div>`;
+}
 async function openConvDetail(filename) {
   const res = await api(`/api/conversations/${encodeURIComponent(filename)}`);
   const data = await res.json();
   if (data.error) { alert(data.error); return; }
   document.getElementById('convDetailTitle').textContent = `对话详情 - ${data.model} - ${new Date(data.timestamp).toLocaleString()}`;
-  document.getElementById('convMetaInfo').innerHTML = `<strong>模型:</strong> ${escapeHtml(data.model)} | <strong>密钥:</strong> ${escapeHtml(data.key_name || 'master')} | <strong>UA:</strong> ${escapeHtml(data.user_agent || '-')} | <strong>请求ID:</strong> ${escapeHtml(data.request_id || '-')}`;
-  const inputRaw = JSON.stringify(data.input, null, 2);
-  const outputRaw = data.output ? JSON.stringify(data.output, null, 2) : (data.output_raw || '');
+  const inputRaw = data.input !== undefined ? (JSON.stringify(data.input, null, 2) || '') : '';
+  const outputRaw = data.output !== undefined && data.output !== null ? (JSON.stringify(data.output, null, 2) || '') : (data.output_raw || '');
   const inputHtml = highlightJson(inputRaw);
   const outputHtml = outputRaw.trim().startsWith('{') || outputRaw.trim().startsWith('[') ? highlightJson(outputRaw) : escapeHtml(outputRaw);
   const inputChars = inputRaw.length;
   const outputChars = outputRaw.length;
-  const panel = (title, chars, content, raw, id) => `
-    <div class="conv-panel">
+  document.getElementById('convMetaInfo').innerHTML = renderConvSummary(data, inputChars, outputChars, inputRaw, outputRaw);
+  const readerText = extractConversationText(data);
+  const promptDocHtml = renderMarkdownDocument(readerText.input || inputRaw, 'prompt');
+  const answerSource = readerText.output || outputRaw;
+  const answerDocHtml = renderMarkdownDocument(answerSource, 'answer');
+  const outlineHtml = buildMarkdownOutline(answerSource, 'answer');
+  const panel = (title, chars, content, raw, kind) => `
+    <div class="conv-panel ${kind}">
       <div class="conv-panel-header">
-        <span class="conv-panel-title">${title}<span class="conv-panel-stat">${chars.toLocaleString()} 字符</span></span>
-        <button class="conv-copy-btn" onclick="copyToClipboard(this.dataset.text,this)" data-text="${escapeHtml(raw)}">复制</button>
+        <span class="conv-panel-title"><span class="conv-panel-dot"></span>${title}<span class="conv-panel-stat">${chars.toLocaleString()} 字符</span></span>
+        <button class="conv-copy-btn" onclick="copyToClipboard(this.dataset.text,this)" data-text="${escapeAttr(raw)}">复制</button>
       </div>
       <div class="conv-pre-wrap"><pre>${content}</pre></div>
     </div>`;
-  const savedLayout = localStorage.getItem('conv_layout') || 'side';
+  const storedLayout = localStorage.getItem('conv_layout_v2');
+  const savedLayout = ['reader', 'side', 'stack', 'input', 'output'].includes(storedLayout) ? storedLayout : 'reader';
   document.getElementById('convDetailBody').innerHTML = `
+    <div class="conv-layout reader ${savedLayout==='reader'?'active':''}" data-mode="reader">
+      <div class="conv-reader-shell">
+        <article class="conv-doc">
+          <section class="conv-doc-section compact">
+            <div class="conv-doc-label">Prompt / Context</div>
+            ${promptDocHtml}
+          </section>
+          <section class="conv-doc-section">
+            <div class="conv-doc-label">Rendered Answer</div>
+            ${answerDocHtml}
+          </section>
+        </article>
+        <aside class="conv-outline">
+          <div class="conv-outline-title">大纲</div>
+          ${outlineHtml}
+        </aside>
+      </div>
+    </div>
     <div class="conv-layout side ${savedLayout==='side'?'active':''}" data-mode="side">
-      ${panel('Input (请求)', inputChars, inputHtml, inputRaw, 'in')}
-      ${panel('Output (响应)', outputChars, outputHtml, outputRaw, 'out')}
+      ${panel('Input (请求)', inputChars, inputHtml, inputRaw, 'request')}
+      ${panel('Output (响应)', outputChars, outputHtml, outputRaw, 'response')}
     </div>
     <div class="conv-layout stack ${savedLayout==='stack'?'active':''}" data-mode="stack">
-      ${panel('Input (请求)', inputChars, inputHtml, inputRaw, 'in')}
-      ${panel('Output (响应)', outputChars, outputHtml, outputRaw, 'out')}
+      ${panel('Input (请求)', inputChars, inputHtml, inputRaw, 'request')}
+      ${panel('Output (响应)', outputChars, outputHtml, outputRaw, 'response')}
     </div>
     <div class="conv-layout single ${savedLayout==='input'?'active':''}" data-mode="input">
-      ${panel('Input (请求)', inputChars, inputHtml, inputRaw, 'in')}
+      ${panel('Input (请求)', inputChars, inputHtml, inputRaw, 'request')}
     </div>
     <div class="conv-layout single ${savedLayout==='output'?'active':''}" data-mode="output">
-      ${panel('Output (响应)', outputChars, outputHtml, outputRaw, 'out')}
+      ${panel('Output (响应)', outputChars, outputHtml, outputRaw, 'response')}
     </div>
   `;
   setConvLayout(savedLayout);
@@ -1155,7 +1529,7 @@ async function loadConnections(page, pageSize) {
   let html = '<table><thead><tr><th>请求ID</th><th>模型</th><th>密钥</th><th>UA</th><th>类型</th><th>已耗时</th><th>操作</th></tr></thead><tbody>';
   for (const c of pagedEntries) {
     const uaShort = (c.userAgent || '-').length > 40 ? (c.userAgent.slice(0, 40) + '...') : (c.userAgent || '-');
-    html += `<tr><td><span style="font-size:.7rem;color:var(--muted)">${c.requestId}</span></td><td>${c.model}</td><td>${c.keyName || 'master'}</td><td title="${(c.userAgent || '').replace(/"/g, '&quot;')}"><span style="font-size:.75rem;color:var(--muted)">${escapeHtml(uaShort)}</span></td><td>${c.stream ? 'Stream' : 'Sync'}</td><td>${c.elapsedMs}ms</td><td><button class="btn btn-sm btn-danger" onclick="abortConnection('${c.requestId}')">中断</button></td></tr>`;
+    html += `<tr><td><span style="font-size:.7rem;color:var(--muted)">${escapeHtml(c.requestId || '-')}</span></td><td>${escapeHtml(c.model || '-')}</td><td>${escapeHtml(c.keyName || 'master')}</td><td title="${escapeAttr(c.userAgent || '')}"><span style="font-size:.75rem;color:var(--muted)">${escapeHtml(uaShort)}</span></td><td>${c.stream ? 'Stream' : 'Sync'}</td><td>${Number.isFinite(c.elapsedMs) ? c.elapsedMs + 'ms' : '-'}</td><td><button class="btn btn-sm btn-danger" data-request-id="${escapeAttr(c.requestId)}" onclick="abortConnection(this.dataset.requestId)">中断</button></td></tr>`;
   }
   html += '</tbody></table>';
   listEl.innerHTML = html;
@@ -1189,6 +1563,25 @@ async function saveConversationStorage() {
   const data = await res.json();
   if (data.success) { toast('对话存储配置已保存'); config.conversation_storage = data.conversation_storage; }
   else alert('保存失败: ' + (data.error || '未知错误'));
+}
+async function openConversationFolder() {
+  const directory = document.getElementById('convDirectory').value.trim();
+  const savedDirectory = (config.conversation_storage && config.conversation_storage.directory) || '';
+  if (!directory) { alert('请先填写并保存保存目录'); return; }
+  if (directory !== savedDirectory) { alert('保存目录已修改，请先保存配置再打开'); return; }
+  const btn = document.getElementById('openConvFolderBtn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '打开中...';
+  try {
+    const res = await api('/api/conversation-storage/open', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) toast('已打开文件夹');
+    else alert('打开失败: ' + (data.error || '未知错误'));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
 }
 function logout() { localStorage.removeItem('litellm_token'); window.location.href = '/login.html'; }
 function toast(msg) { const el = document.getElementById('toast'); el.textContent = msg; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2000); }
