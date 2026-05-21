@@ -61,3 +61,29 @@ fn sqlite_usage_database_exports_and_clears_logs() {
     assert_eq!(page.stats.total_requests, 0);
     assert!(page.entries.is_empty());
 }
+
+#[tokio::test]
+async fn sqlite_usage_database_exposes_async_wrappers_for_request_path() {
+    let db = Database::memory().unwrap();
+    db.record_usage_async(log_entry("gpt-a", "master", 10, 0, 5))
+        .await
+        .unwrap();
+
+    let count = db
+        .request_count_since_async(
+            "2026-05-21T00:00:00Z".to_string(),
+            Some("master".to_string()),
+            None,
+        )
+        .await
+        .unwrap();
+    let cost = db
+        .total_cost_async(Some("master".to_string()), None)
+        .await
+        .unwrap();
+    let page = db.usage_page_async(1, 20).await.unwrap();
+
+    assert_eq!(count, 1);
+    assert_eq!(cost, 0.42);
+    assert_eq!(page.stats.total_requests, 1);
+}

@@ -26,6 +26,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
@@ -69,6 +70,7 @@ pub struct ServerState {
     pub root: Arc<PathBuf>,
     pub static_root: Arc<PathBuf>,
     pub database: Database,
+    config: Arc<RwLock<AppConfig>>,
     client: reqwest::Client,
     jwt_secret: Arc<String>,
 }
@@ -81,16 +83,26 @@ impl ServerState {
     pub fn with_roots(root: PathBuf, static_root: PathBuf) -> Self {
         let database = Database::open(&root)
             .unwrap_or_else(|err| panic!("failed to open OpenRelay database: {err}"));
+        let config = load_config(&root).unwrap_or_else(|_| AppConfig::default());
         Self {
             root: Arc::new(root),
             static_root: Arc::new(static_root),
             database,
+            config: Arc::new(RwLock::new(config)),
             client: reqwest::Client::new(),
             jwt_secret: Arc::new(
                 std::env::var("JWT_SECRET")
                     .unwrap_or_else(|_| "openrelay-webui-secret-change-me".to_string()),
             ),
         }
+    }
+
+    pub async fn current_config(&self) -> AppConfig {
+        self.config.read().await.clone()
+    }
+
+    pub async fn replace_config(&self, config: AppConfig) {
+        *self.config.write().await = config;
     }
 }
 
@@ -271,7 +283,7 @@ async fn login(
     State(state): State<ServerState>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let cfg = load_config(&state.root)?;
+    let cfg = state.current_config().await;
     if payload.username != cfg.admin.username
         || !verify(payload.password, &cfg.admin.password_hash).unwrap_or(false)
     {
@@ -301,7 +313,7 @@ async fn change_password(
     Json(payload): Json<PasswordRequest>,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    let mut cfg = load_config(&state.root)?;
+    let mut cfg = state.current_config().await;
     if !verify(payload.old_password, &cfg.admin.password_hash).unwrap_or(false) {
         return Ok((
             StatusCode::BAD_REQUEST,
@@ -312,6 +324,7 @@ async fn change_password(
     cfg.admin.password_hash =
         bcrypt::hash(payload.new_password, bcrypt::DEFAULT_COST).map_err(ConfigError::from)?;
     save_config(&state.root, &cfg)?;
+    state.replace_config(cfg).await;
     Ok(Json(json!({ "success": true })).into_response())
 }
 
@@ -320,7 +333,7 @@ async fn get_config(
     headers: HeaderMap,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    let mut safe = serde_json::to_value(load_config(&state.root)?)?;
+    let mut safe = serde_json::to_value(state.current_config().await)?;
     if let Some(admin) = safe.get_mut("admin") {
         *admin = json!({ "username": admin.get("username").cloned().unwrap_or(json!("admin")) });
     }
@@ -340,10 +353,11 @@ async fn post_config(
     Json(mut incoming): Json<AppConfig>,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    let current = load_config(&state.root)?;
+    let current = state.current_config().await;
     incoming.admin = current.admin;
     incoming.virtual_keys = current.virtual_keys;
     save_config(&state.root, &incoming)?;
+    state.replace_config(incoming).await;
     Ok(Json(json!({ "success": true })).into_response())
 }
 
@@ -351,7 +365,7 @@ async fn restart_proxy() -> Json<Value> {
     Json(json!({
         "success": true,
         "unified": true,
-        "message": "配置已保存，OpenRelay Rust 后端会在下一次请求时读取最新配置。"
+        "message": "配置已保存，OpenRelay Rust 后端已刷新内存配置。"
     }))
 }
 
@@ -360,7 +374,7 @@ async fn get_pricing(
     headers: HeaderMap,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    Ok(Json(load_config(&state.root)?.pricing).into_response())
+    Ok(Json(state.current_config().await.pricing).into_response())
 }
 
 async fn post_pricing(
@@ -369,9 +383,10 @@ async fn post_pricing(
     Json(pricing): Json<Value>,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    let mut cfg = load_config(&state.root)?;
+    let mut cfg = state.current_config().await;
     cfg.pricing = pricing;
     save_config(&state.root, &cfg)?;
+    state.replace_config(cfg).await;
     Ok(Json(json!({ "success": true })).into_response())
 }
 
@@ -380,7 +395,7 @@ async fn get_limits(
     headers: HeaderMap,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    Ok(Json(load_config(&state.root)?.limits).into_response())
+    Ok(Json(state.current_config().await.limits).into_response())
 }
 
 async fn post_limits(
@@ -389,9 +404,10 @@ async fn post_limits(
     Json(limits): Json<Value>,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    let mut cfg = load_config(&state.root)?;
+    let mut cfg = state.current_config().await;
     cfg.limits = limits;
     save_config(&state.root, &cfg)?;
+    state.replace_config(cfg).await;
     Ok(Json(json!({ "success": true })).into_response())
 }
 
@@ -400,7 +416,9 @@ async fn get_virtual_keys(
     headers: HeaderMap,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    let keys: Vec<Value> = load_config(&state.root)?
+    let keys: Vec<Value> = state
+        .current_config()
+        .await
         .virtual_keys
         .into_iter()
         .map(|mut k| {
@@ -417,10 +435,11 @@ async fn post_virtual_key(
     Json(mut key): Json<VirtualKeyConfig>,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    let mut cfg = load_config(&state.root)?;
+    let mut cfg = state.current_config().await;
     key.key = format!("sk-vk-{}", Uuid::new_v4().simple());
     cfg.virtual_keys.push(key.clone());
     save_config(&state.root, &cfg)?;
+    state.replace_config(cfg).await;
     Ok(Json(json!({ "success": true, "key": key })).into_response())
 }
 
@@ -431,13 +450,14 @@ async fn put_virtual_key(
     Json(mut key): Json<VirtualKeyConfig>,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    let mut cfg = load_config(&state.root)?;
+    let mut cfg = state.current_config().await;
     if index >= cfg.virtual_keys.len() {
         return Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "Not found" }))).into_response());
     }
     key.key = cfg.virtual_keys[index].key.clone();
     cfg.virtual_keys[index] = key;
     save_config(&state.root, &cfg)?;
+    state.replace_config(cfg).await;
     Ok(Json(json!({ "success": true })).into_response())
 }
 
@@ -447,12 +467,13 @@ async fn delete_virtual_key(
     headers: HeaderMap,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    let mut cfg = load_config(&state.root)?;
+    let mut cfg = state.current_config().await;
     if index >= cfg.virtual_keys.len() {
         return Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "Not found" }))).into_response());
     }
     cfg.virtual_keys.remove(index);
     save_config(&state.root, &cfg)?;
+    state.replace_config(cfg).await;
     Ok(Json(json!({ "success": true })).into_response())
 }
 
@@ -545,7 +566,7 @@ async fn detect_models(
     headers: HeaderMap,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
-    let cfg = load_config(&state.root)?;
+    let cfg = state.current_config().await;
     let mut models = Vec::new();
     for provider in &cfg.providers {
         for model in &provider.models {
@@ -569,7 +590,8 @@ async fn get_usage(
     Ok(Json(
         state
             .database
-            .usage_page(query.page.unwrap_or(1), query.page_size.unwrap_or(20))?,
+            .usage_page_async(query.page.unwrap_or(1), query.page_size.unwrap_or(20))
+            .await?,
     )
     .into_response())
 }
@@ -588,7 +610,7 @@ async fn export_usage(
                 "attachment; filename=\"usage-export-rust.csv\"",
             ),
         ],
-        state.database.export_usage_csv()?,
+        state.database.export_usage_csv_async().await?,
     )
         .into_response())
 }
@@ -598,7 +620,7 @@ async fn clear_usage(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ServerError> {
     require_admin(&state, &headers)?;
-    state.database.clear_usage()?;
+    state.database.clear_usage_async().await?;
     Ok(Json(json!({ "success": true })))
 }
 async fn merge_usage(
@@ -636,9 +658,10 @@ async fn post_conversation_storage(
         enabled: storage.enabled,
         directory: storage.directory.trim().to_string(),
     };
-    let mut cfg = load_config(&state.root)?;
+    let mut cfg = state.current_config().await;
     cfg.conversation_storage = storage.clone();
     save_config(&state.root, &cfg)?;
+    state.replace_config(cfg).await;
     Ok(Json(json!({ "success": true, "conversation_storage": storage })).into_response())
 }
 async fn open_conversation_storage() -> Json<Value> {
@@ -690,7 +713,7 @@ fn query_key(query: Option<&str>) -> Option<String> {
     })
 }
 
-fn check_request_limits(
+async fn check_request_limits(
     state: &ServerState,
     cfg: &AppConfig,
     model: &str,
@@ -702,39 +725,56 @@ fn check_request_limits(
     if let Some(rpm) = key_check.virtual_key.as_ref().and_then(|key| key.rpm) {
         if state
             .database
-            .request_count_since(&since, Some(key_name), None)?
+            .request_count_since_async(since.clone(), Some(key_name.to_string()), None)
+            .await?
             >= rpm as u64
         {
             return Ok(Some(format!("密钥 \"{key_name}\" 已达到 RPM 限额 {rpm}")));
         }
     }
     if let Some(budget) = key_check.virtual_key.as_ref().and_then(|key| key.budget) {
-        if state.database.total_cost(Some(key_name), None)? >= budget {
+        if state
+            .database
+            .total_cost_async(Some(key_name.to_string()), None)
+            .await?
+            >= budget
+        {
             return Ok(Some(format!("密钥 \"{key_name}\" 已达到预算限额 {budget}")));
         }
     }
 
     if let Some(rpm) = limit_u64(cfg.limits.get("global"), "rpm") {
-        if state.database.request_count_since(&since, None, None)? >= rpm {
+        if state
+            .database
+            .request_count_since_async(since.clone(), None, None)
+            .await?
+            >= rpm
+        {
             return Ok(Some(format!("全局 RPM 已达到限额 {rpm}")));
         }
     }
     if let Some(budget) = limit_f64(cfg.limits.get("global"), "budget") {
-        if state.database.total_cost(None, None)? >= budget {
+        if state.database.total_cost_async(None, None).await? >= budget {
             return Ok(Some(format!("全局预算已达到限额 {budget}")));
         }
     }
     if let Some(rpm) = limit_u64(cfg.limits.get(model), "rpm") {
         if state
             .database
-            .request_count_since(&since, None, Some(model))?
+            .request_count_since_async(since.clone(), None, Some(model.to_string()))
+            .await?
             >= rpm
         {
             return Ok(Some(format!("模型 {model} 已达到 RPM 限额 {rpm}")));
         }
     }
     if let Some(budget) = limit_f64(cfg.limits.get(model), "budget") {
-        if state.database.total_cost(None, Some(model))? >= budget {
+        if state
+            .database
+            .total_cost_async(None, Some(model.to_string()))
+            .await?
+            >= budget
+        {
             return Ok(Some(format!("模型 {model} 已达到预算限额 {budget}")));
         }
     }
@@ -763,7 +803,7 @@ async fn proxy_handler(
     request: Request<Body>,
 ) -> Result<Response, ServerError> {
     let started = Instant::now();
-    let cfg = load_config(&state.root)?;
+    let cfg = state.current_config().await;
     let raw_path = uri
         .path_and_query()
         .map(|pq| pq.as_str())
@@ -836,7 +876,8 @@ async fn proxy_handler(
             }
         })
         .unwrap_or_else(|| "master".to_string());
-    if let Some(message) = check_request_limits(&state, &cfg, &model, &key_name, &key_check)? {
+    if let Some(message) = check_request_limits(&state, &cfg, &model, &key_name, &key_check).await?
+    {
         return Ok(limit_error(message));
     }
     let request_id = Uuid::new_v4().to_string();
@@ -848,7 +889,8 @@ async fn proxy_handler(
     let stream = json_body
         .get("stream")
         .and_then(Value::as_bool)
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || (protocol == ProxyProtocol::Gemini && target_path.contains(":streamGenerateContent"));
     let Some(provider) = resolve_provider(&model, &cfg) else {
         return Ok((
             StatusCode::BAD_REQUEST,
@@ -913,6 +955,52 @@ async fn proxy_handler(
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
     let content_disposition = response.headers().get(header::CONTENT_DISPOSITION).cloned();
+    let mut out = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, response_content_type.clone());
+    if let Some(disposition) = content_disposition {
+        out = out.header(header::CONTENT_DISPOSITION, disposition);
+    }
+    if stream {
+        let database = state.database.clone();
+        let pricing = cfg.pricing.clone();
+        let usage_body = json_body.clone();
+        let usage_model = model.clone();
+        let usage_path = target_path.to_string();
+        let duration_ms = started.elapsed().as_millis() as u64;
+        let error = if status.is_success() {
+            String::new()
+        } else {
+            format!("HTTP {status}")
+        };
+        tokio::spawn(async move {
+            let estimated_input = estimate_tokens(&usage_body);
+            let cost = calc_cost(&usage_model, estimated_input, 0, 0, 0, &pricing);
+            let _ = database
+                .record_usage_async(UsageLog {
+                    timestamp: Utc::now().to_rfc3339(),
+                    request_id,
+                    model: usage_model,
+                    key_name,
+                    input_tokens: estimated_input,
+                    cached_tokens: 0,
+                    cached_write_tokens: 0,
+                    output_tokens: 0,
+                    cost,
+                    status: status.as_u16(),
+                    duration_ms,
+                    stream,
+                    user_agent,
+                    error,
+                    path: usage_path,
+                })
+                .await;
+        });
+        return Ok(out
+            .body(Body::from_stream(response.bytes_stream()))
+            .unwrap());
+    }
+
     let bytes = response.bytes().await?;
     let estimated_input = estimate_tokens(&json_body);
     let mut usage = crate::proxy::UsageTokens {
@@ -944,29 +1032,26 @@ async fn proxy_handler(
             .take(300)
             .collect::<String>()
     };
-    let _ = state.database.record_usage(&UsageLog {
-        timestamp: Utc::now().to_rfc3339(),
-        request_id,
-        model: model.clone(),
-        key_name,
-        input_tokens: usage.input_tokens,
-        cached_tokens: usage.cached_tokens,
-        cached_write_tokens: usage.cached_write_tokens,
-        output_tokens: usage.output_tokens,
-        cost,
-        status: status.as_u16(),
-        duration_ms: started.elapsed().as_millis() as u64,
-        stream,
-        user_agent,
-        error,
-        path: target_path.to_string(),
-    });
-    let mut out = Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, response_content_type);
-    if let Some(disposition) = content_disposition {
-        out = out.header(header::CONTENT_DISPOSITION, disposition);
-    }
+    let _ = state
+        .database
+        .record_usage_async(UsageLog {
+            timestamp: Utc::now().to_rfc3339(),
+            request_id,
+            model: model.clone(),
+            key_name,
+            input_tokens: usage.input_tokens,
+            cached_tokens: usage.cached_tokens,
+            cached_write_tokens: usage.cached_write_tokens,
+            output_tokens: usage.output_tokens,
+            cost,
+            status: status.as_u16(),
+            duration_ms: started.elapsed().as_millis() as u64,
+            stream,
+            user_agent,
+            error,
+            path: target_path.to_string(),
+        })
+        .await;
     Ok(out.body(Body::from(bytes)).unwrap())
 }
 

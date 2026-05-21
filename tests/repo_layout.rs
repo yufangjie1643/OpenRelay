@@ -50,3 +50,23 @@ fn frontend_shows_protocol_specific_proxy_endpoints_and_stable_model_picker() {
     assert!(index.contains("fetched-model-row"));
     assert!(index.contains("overflow-wrap:anywhere"));
 }
+
+#[test]
+fn rust_proxy_hot_path_uses_streaming_cache_async_db_and_tokenizer() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let server = std::fs::read_to_string(root.join("src").join("server.rs")).unwrap();
+    let database = std::fs::read_to_string(root.join("src").join("database.rs")).unwrap();
+    let proxy = std::fs::read_to_string(root.join("src").join("proxy.rs")).unwrap();
+    let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+
+    assert!(server.contains("RwLock<AppConfig>"));
+    assert!(server.contains("current_config().await"));
+    assert!(server.contains("Body::from_stream"));
+    assert!(server.contains("bytes_stream()"));
+    assert!(server.contains("record_usage_async"));
+    assert!(server.contains("request_count_since_async"));
+    assert!(server.contains("total_cost_async"));
+    assert!(database.contains("spawn_blocking"));
+    assert!(cargo.contains("tiktoken-rs"));
+    assert!(!proxy.contains("/ 4.0"));
+}

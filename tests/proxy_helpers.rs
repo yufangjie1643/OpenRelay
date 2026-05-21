@@ -1,7 +1,7 @@
 use openrelay::config::{AppConfig, ModelConfig, ProviderConfig, VirtualKeyConfig};
 use openrelay::proxy::{
     build_gemini_upstream_url, build_models_response, build_upstream_url, calc_cost,
-    extract_usage_tokens, get_request_model, resolve_provider,
+    estimate_tokens, extract_usage_tokens, get_request_model, resolve_provider,
 };
 use serde_json::json;
 
@@ -157,6 +157,22 @@ fn extracts_gemini_usage_metadata() {
     assert_eq!(gemini.input_tokens, 23);
     assert_eq!(gemini.output_tokens, 11);
     assert_eq!(gemini.cached_tokens, 0);
+}
+
+#[test]
+fn estimates_cjk_prompt_tokens_with_model_tokenizer() {
+    let tokens = estimate_tokens(&json!({
+        "model": "gpt-4o",
+        "messages": [{
+            "role": "user",
+            "content": "请帮我总结下面这段中文内容，并保持专业语气，同时列出三个关键结论。这里还包含一小段 Rust 代码：fn main() { println!(\"你好\"); }"
+        }]
+    }));
+
+    assert!(
+        tokens >= 40,
+        "expected tokenizer-style estimate for CJK/code prompt, got {tokens}"
+    );
 }
 
 #[test]

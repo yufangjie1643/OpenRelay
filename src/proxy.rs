@@ -319,7 +319,13 @@ pub fn estimate_tokens(body: &Value) -> u64 {
     }
     let mut text = String::new();
     collect(body, &mut text);
-    ((text.chars().count() as f64) / 4.0).ceil().max(1.0) as u64
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("gpt-4o-mini");
+    let bpe =
+        tiktoken_rs::bpe_for_model(model).unwrap_or_else(|_| tiktoken_rs::cl100k_base_singleton());
+    bpe.count_with_special_tokens(&text).max(1) as u64
 }
 
 pub fn extract_usage_tokens(data: &Value, fallback_input: u64) -> UsageTokens {

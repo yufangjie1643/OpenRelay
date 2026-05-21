@@ -1,16 +1,21 @@
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
-use axum::http::{HeaderMap, Request, StatusCode, Uri};
-use axum::response::IntoResponse;
+use axum::http::{header, HeaderMap, Request, StatusCode, Uri};
+use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::{Json, Router};
 use chrono::Utc;
+use futures_util::StreamExt;
 use openrelay::config::{save_config, AppConfig, ModelConfig, ProviderConfig, VirtualKeyConfig};
 use openrelay::database::{Database, UsageLog};
 use openrelay::server::{build_router, ServerState};
 use serde_json::json;
+use std::path::Path;
+use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::{sleep, Duration};
+use tokio_stream::wrappers::ReceiverStream;
 use tower::ServiceExt;
 
 #[derive(Debug)]
@@ -56,6 +61,46 @@ async fn models_endpoint_returns_configured_models_for_master_key() {
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(value["data"][0]["id"], "local-gpt");
+}
+
+#[tokio::test]
+async fn models_endpoint_uses_startup_config_cache_until_api_changes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = AppConfig::default();
+    cfg.providers.push(ProviderConfig {
+        id: "p1".to_string(),
+        name: "OpenAI".to_string(),
+        provider_type: "openai".to_string(),
+        base_url: Some("https://api.example.com/v1".to_string()),
+        api_key: "provider-key".to_string(),
+        user_agent: None,
+        models: vec![ModelConfig {
+            model_name: "cached-gpt".to_string(),
+            model_id: "gpt-4o-mini".to_string(),
+        }],
+    });
+    save_config(dir.path(), &cfg).unwrap();
+
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    save_config(dir.path(), &AppConfig::default()).unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/models")
+                .header("authorization", "Bearer openrelay-master")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["data"][0]["id"], "cached-gpt");
 }
 
 #[tokio::test]
@@ -340,6 +385,57 @@ async fn conversation_storage_save_returns_saved_setting() {
     );
 }
 
+#[tokio::test]
+async fn openai_stream_proxy_forwards_first_chunk_before_upstream_finishes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (upstream_url, shutdown_upstream, upstream_server) =
+        spawn_openai_streaming_upstream().await;
+    let mut cfg = AppConfig::default();
+    cfg.providers.push(ProviderConfig {
+        id: "p1".to_string(),
+        name: "OpenAI".to_string(),
+        provider_type: "openai".to_string(),
+        base_url: Some(format!("{upstream_url}/v1")),
+        api_key: "provider-key".to_string(),
+        user_agent: None,
+        models: vec![ModelConfig {
+            model_name: "local-gpt".to_string(),
+            model_id: "gpt-4o-mini".to_string(),
+        }],
+    });
+    save_config(dir.path(), &cfg).unwrap();
+    let (gateway_url, shutdown_gateway, gateway_server) = spawn_openrelay_server(dir.path()).await;
+
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let started = Instant::now();
+    let response = client
+        .post(format!("{gateway_url}/v1/chat/completions"))
+        .bearer_auth("openrelay-master")
+        .json(&json!({
+            "model": "local-gpt",
+            "stream": true,
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.bytes_stream();
+    let first = stream.next().await.unwrap().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "first stream chunk was buffered for {:?}",
+        started.elapsed()
+    );
+    assert!(String::from_utf8_lossy(&first).contains("delta"));
+
+    let _ = shutdown_gateway.send(());
+    gateway_server.await.unwrap();
+    let _ = shutdown_upstream.send(());
+    upstream_server.await.unwrap();
+}
+
 async fn login_token(app: axum::Router) -> String {
     let response = app
         .oneshot(
@@ -359,6 +455,66 @@ async fn login_token(app: axum::Router) -> String {
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     value["token"].as_str().unwrap().to_string()
+}
+
+async fn spawn_openrelay_server(
+    root: &Path,
+) -> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let app = build_router(ServerState::new(root.to_path_buf()));
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .unwrap();
+    });
+    (format!("http://{addr}"), shutdown_tx, server)
+}
+
+async fn spawn_openai_streaming_upstream(
+) -> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let app = Router::new().route("/*path", any(openai_streaming_response));
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .unwrap();
+    });
+    (format!("http://{addr}"), shutdown_tx, server)
+}
+
+async fn openai_streaming_response() -> Response {
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+    tokio::spawn(async move {
+        let _ = tx
+            .send(Ok(Bytes::from_static(
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n",
+            )))
+            .await;
+        sleep(Duration::from_millis(700)).await;
+        let _ = tx
+            .send(Ok(Bytes::from_static(
+                b"data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n",
+            )))
+            .await;
+        let _ = tx.send(Ok(Bytes::from_static(b"data: [DONE]\n\n"))).await;
+    });
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .body(Body::from_stream(ReceiverStream::new(rx)))
+        .unwrap()
 }
 
 async fn spawn_gemini_upstream() -> (

@@ -14,6 +14,8 @@ pub enum DatabaseError {
     Sqlite(#[from] rusqlite::Error),
     #[error("database lock poisoned")]
     LockPoisoned,
+    #[error("blocking database task failed: {0}")]
+    BlockingTask(String),
 }
 
 #[derive(Clone)]
@@ -126,6 +128,13 @@ impl Database {
         Ok(())
     }
 
+    pub async fn record_usage_async(&self, entry: UsageLog) -> Result<(), DatabaseError> {
+        let db = self.clone();
+        tokio::task::spawn_blocking(move || db.record_usage(&entry))
+            .await
+            .map_err(|err| DatabaseError::BlockingTask(err.to_string()))?
+    }
+
     pub fn usage_page(&self, page: u64, page_size: u64) -> Result<UsagePage, DatabaseError> {
         let page = page.max(1);
         let page_size = page_size.clamp(1, 100);
@@ -159,9 +168,27 @@ impl Database {
         })
     }
 
+    pub async fn usage_page_async(
+        &self,
+        page: u64,
+        page_size: u64,
+    ) -> Result<UsagePage, DatabaseError> {
+        let db = self.clone();
+        tokio::task::spawn_blocking(move || db.usage_page(page, page_size))
+            .await
+            .map_err(|err| DatabaseError::BlockingTask(err.to_string()))?
+    }
+
     pub fn clear_usage(&self) -> Result<(), DatabaseError> {
         self.lock_conn()?.execute("DELETE FROM usage_logs", [])?;
         Ok(())
+    }
+
+    pub async fn clear_usage_async(&self) -> Result<(), DatabaseError> {
+        let db = self.clone();
+        tokio::task::spawn_blocking(move || db.clear_usage())
+            .await
+            .map_err(|err| DatabaseError::BlockingTask(err.to_string()))?
     }
 
     pub fn request_count_since(
@@ -183,6 +210,20 @@ impl Database {
         Ok(count.max(0) as u64)
     }
 
+    pub async fn request_count_since_async(
+        &self,
+        since: String,
+        key_name: Option<String>,
+        model: Option<String>,
+    ) -> Result<u64, DatabaseError> {
+        let db = self.clone();
+        tokio::task::spawn_blocking(move || {
+            db.request_count_since(&since, key_name.as_deref(), model.as_deref())
+        })
+        .await
+        .map_err(|err| DatabaseError::BlockingTask(err.to_string()))?
+    }
+
     pub fn total_cost(
         &self,
         key_name: Option<&str>,
@@ -198,6 +239,17 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok(cost)
+    }
+
+    pub async fn total_cost_async(
+        &self,
+        key_name: Option<String>,
+        model: Option<String>,
+    ) -> Result<f64, DatabaseError> {
+        let db = self.clone();
+        tokio::task::spawn_blocking(move || db.total_cost(key_name.as_deref(), model.as_deref()))
+            .await
+            .map_err(|err| DatabaseError::BlockingTask(err.to_string()))?
     }
 
     pub fn export_usage_csv(&self) -> Result<String, DatabaseError> {
@@ -236,6 +288,13 @@ impl Database {
             ));
         }
         Ok(out)
+    }
+
+    pub async fn export_usage_csv_async(&self) -> Result<String, DatabaseError> {
+        let db = self.clone();
+        tokio::task::spawn_blocking(move || db.export_usage_csv())
+            .await
+            .map_err(|err| DatabaseError::BlockingTask(err.to_string()))?
     }
 
     pub fn import_usage_jsonl(&self, path: &Path) -> Result<usize, DatabaseError> {
