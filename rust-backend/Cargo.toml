@@ -1,0 +1,33 @@
+[package]
+name = "openrelay"
+version = "0.1.0"
+edition = "2021"
+description = "OpenRelay Rust backend prototype"
+
+[lib]
+name = "openrelay"
+path = "src/lib.rs"
+
+[[bin]]
+name = "openrelay"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7", features = ["macros", "multipart"] }
+bcrypt = "0.15"
+chrono = { version = "0.4", features = ["serde"] }
+jsonwebtoken = "9"
+mime_guess = "2"
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+thiserror = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "signal"] }
+tower-http = { version = "0.5", features = ["cors"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

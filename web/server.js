@@ -210,7 +210,7 @@ function ensureFiles() {
       virtual_keys: [],
       router_settings: { timeout: 60 },
       litellm_settings: { drop_params: true, allowed_headers: ['*'] },
-      general_settings: { master_key: 'openrelay-master-key' }
+      general_settings: { master_key: 'openrelay-master' }
     };
     saveConfig(defaultCfg);
   }

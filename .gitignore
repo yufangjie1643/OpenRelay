@@ -16,6 +16,8 @@ config.json
 litellm-config.yaml
 openrelay-config.yaml
 *.res
+target/
+rust-backend/target/
 
 # OS files
 Thumbs.db

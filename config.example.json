@@ -9,7 +9,7 @@
     ]
   },
   "general_settings": {
-    "master_key": "openrelay-master-key"
+    "master_key": "openrelay-master"
   },
   "admin": {
     "username": "admin",

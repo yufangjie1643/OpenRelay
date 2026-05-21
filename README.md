@@ -38,6 +38,22 @@ npm install
 npm start
 ```
 
+Rust 后端初版位于 `rust-backend/`，可在 `rust-backend` 分支中试用：
+
+```powershell
+.\start-rust.bat
+```
+
+或手动运行：
+
+```powershell
+cd rust-backend
+$env:OPENRELAY_ROOT = (Resolve-Path ..).Path
+cargo run
+```
+
+当前 Rust 初版提供登录、配置读写、定价/限额/虚拟密钥 API、模型列表、基础 OpenAI 兼容转发、静态前端托管和轻量的用量/对话/连接占位接口。完整用量归档、对话保存、活跃连接中止和所有历史边缘路径仍以后续迁移为准。
+
 启动后访问：
 
 ```text
@@ -130,12 +146,20 @@ npm run test:frontend
 npm run test:proxy
 ```
 
+Rust 后端测试：
+
+```powershell
+cd rust-backend
+cargo test
+```
+
 当前测试覆盖前端静态约束、内联脚本解析、代理路径兼容、模型解析、用量 token 提取、计费、归档、对话存储路径和托盘启动约束。
 
 ## 项目结构
 
 ```text
 web/server.js              Express 服务、配置迁移、代理、认证、用量和对话记录
+rust-backend/              Rust 后端初版，基于 Axum 和 Reqwest
 web/public/index.html      管理面板 UI
 web/public/login.html      登录页
 web/package.json           Node.js 依赖和 npm scripts
