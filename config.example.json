@@ -470,7 +470,7 @@
     }
   ],
   "conversation_storage": {
-    "enabled": true,
-    "directory": "./conversations"
+    "enabled": false,
+    "directory": ""
   }
 }

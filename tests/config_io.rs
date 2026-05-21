@@ -16,6 +16,8 @@ fn ensure_files_creates_default_config_and_yaml() {
         cfg.general_settings.master_key.as_deref(),
         Some("openrelay-master")
     );
+    assert!(!cfg.conversation_storage.enabled);
+    assert!(cfg.conversation_storage.directory.is_empty());
 }
 
 #[test]

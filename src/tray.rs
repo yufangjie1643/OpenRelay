@@ -1,5 +1,6 @@
-use crate::config::ensure_files;
-use crate::server::{port_from_env, root_from_env, serve_with_shutdown};
+use crate::migration::migrate_legacy_data;
+use crate::paths::AppPaths;
+use crate::server::{port_from_env, serve_with_shutdown_and_static};
 use std::ffi::OsStr;
 use std::io;
 use std::mem::size_of;
@@ -62,9 +63,9 @@ pub fn default_admin_url(port: u16) -> String {
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let root = root_from_env();
+    let paths = AppPaths::from_env();
     let port = port_from_env();
-    if let Err(err) = ensure_files(&root) {
+    if let Err(err) = migrate_legacy_data(&paths.data_root, paths.legacy_root.as_deref()) {
         show_error_message(&format!("OpenRelay 配置初始化失败：\n{err}"));
         return Err(Box::new(err));
     }
@@ -85,7 +86,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let (sender, receiver) = mpsc::unbounded_channel();
-    let backend = spawn_backend(root.clone(), port, receiver);
+    let backend = spawn_backend(
+        paths.data_root.clone(),
+        paths.static_root.clone(),
+        port,
+        receiver,
+    );
     TRAY_STATE
         .set(Mutex::new(TrayState {
             sender: sender.clone(),
@@ -93,7 +99,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .map_err(|_| "tray state is already initialized")?;
 
-    let result = unsafe { run_message_loop(&root, port) };
+    let result = unsafe { run_message_loop(&paths.static_root, port) };
     let _ = sender.send(BackendCommand::Shutdown);
     let _ = backend.join();
     unsafe {
@@ -104,6 +110,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 fn spawn_backend(
     root: PathBuf,
+    static_root: PathBuf,
     port: u16,
     receiver: mpsc::UnboundedReceiver<BackendCommand>,
 ) -> thread::JoinHandle<()> {
@@ -118,20 +125,26 @@ fn spawn_backend(
                 return;
             }
         };
-        runtime.block_on(backend_loop(root, port, receiver));
+        runtime.block_on(backend_loop(root, static_root, port, receiver));
     })
 }
 
 async fn backend_loop(
     root: PathBuf,
+    static_root: PathBuf,
     port: u16,
     mut receiver: mpsc::UnboundedReceiver<BackendCommand>,
 ) {
     loop {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let mut server = tokio::spawn(serve_with_shutdown(root.clone(), port, async move {
-            let _ = shutdown_rx.await;
-        }));
+        let mut server = tokio::spawn(serve_with_shutdown_and_static(
+            root.clone(),
+            static_root.clone(),
+            port,
+            async move {
+                let _ = shutdown_rx.await;
+            },
+        ));
 
         tokio::select! {
             result = &mut server => {

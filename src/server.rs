@@ -1,8 +1,9 @@
 use crate::config::{
-    ensure_files, load_config, save_config, AppConfig, ConfigError, ConversationStorage,
-    VirtualKeyConfig,
+    load_config, save_config, AppConfig, ConfigError, ConversationStorage, VirtualKeyConfig,
 };
 use crate::database::{Database, DatabaseError, UsageLog};
+use crate::migration::{migrate_legacy_data, MigrationError};
+use crate::paths::{data_root_from_env, static_root_from_env, AppPaths};
 use crate::proxy::{
     build_models_response, build_upstream_url, calc_cost, check_virtual_key, estimate_tokens,
     extract_usage_tokens, get_request_model, is_models_endpoint, resolve_provider,
@@ -41,6 +42,8 @@ pub enum ServerError {
     Reqwest(#[from] reqwest::Error),
     #[error("Database error: {0}")]
     Database(#[from] DatabaseError),
+    #[error("migration error: {0}")]
+    Migration(#[from] MigrationError),
     #[error("JWT error: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
     #[error("invalid header value: {0}")]
@@ -63,6 +66,7 @@ impl IntoResponse for ServerError {
 #[derive(Clone)]
 pub struct ServerState {
     pub root: Arc<PathBuf>,
+    pub static_root: Arc<PathBuf>,
     pub database: Database,
     client: reqwest::Client,
     jwt_secret: Arc<String>,
@@ -70,10 +74,15 @@ pub struct ServerState {
 
 impl ServerState {
     pub fn new(root: PathBuf) -> Self {
+        Self::with_roots(root, static_root_from_env())
+    }
+
+    pub fn with_roots(root: PathBuf, static_root: PathBuf) -> Self {
         let database = Database::open(&root)
             .unwrap_or_else(|err| panic!("failed to open OpenRelay database: {err}"));
         Self {
             root: Arc::new(root),
+            static_root: Arc::new(static_root),
             database,
             client: reqwest::Client::new(),
             jwt_secret: Arc::new(
@@ -182,22 +191,11 @@ pub fn build_router(state: ServerState) -> Router {
 }
 
 pub async fn run_from_env() -> Result<(), ServerError> {
-    serve(root_from_env(), port_from_env()).await
+    serve_paths(AppPaths::from_env(), port_from_env()).await
 }
 
 pub fn root_from_env() -> PathBuf {
-    std::env::var("OPENRELAY_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            if let Ok(exe) = std::env::current_exe() {
-                if let Some(dir) = exe.parent() {
-                    if dir.join("public").join("index.html").exists() {
-                        return dir.to_path_buf();
-                    }
-                }
-            }
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        })
+    data_root_from_env()
 }
 
 pub fn port_from_env() -> u16 {
@@ -208,11 +206,28 @@ pub fn port_from_env() -> u16 {
 }
 
 pub async fn serve(root: PathBuf, port: u16) -> Result<(), ServerError> {
-    ensure_files(&root)?;
+    migrate_legacy_data(&root, None)?;
+    serve_initialized(root, static_root_from_env(), port).await
+}
+
+pub async fn serve_paths(paths: AppPaths, port: u16) -> Result<(), ServerError> {
+    migrate_legacy_data(&paths.data_root, paths.legacy_root.as_deref())?;
+    serve_initialized(paths.data_root, paths.static_root, port).await
+}
+
+async fn serve_initialized(
+    root: PathBuf,
+    static_root: PathBuf,
+    port: u16,
+) -> Result<(), ServerError> {
     let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).await?;
     println!("OpenRelay Rust backend running at http://localhost:{port}");
-    axum::serve(listener, build_router(ServerState::new(root))).await?;
+    axum::serve(
+        listener,
+        build_router(ServerState::with_roots(root, static_root)),
+    )
+    .await?;
     Ok(())
 }
 
@@ -224,13 +239,28 @@ pub async fn serve_with_shutdown<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    ensure_files(&root)?;
+    migrate_legacy_data(&root, None)?;
+    serve_with_shutdown_and_static(root, static_root_from_env(), port, shutdown).await
+}
+
+pub async fn serve_with_shutdown_and_static<F>(
+    root: PathBuf,
+    static_root: PathBuf,
+    port: u16,
+    shutdown: F,
+) -> Result<(), ServerError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).await?;
     println!("OpenRelay Rust backend running at http://localhost:{port}");
-    axum::serve(listener, build_router(ServerState::new(root)))
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    axum::serve(
+        listener,
+        build_router(ServerState::with_roots(root, static_root)),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await?;
     Ok(())
 }
 
@@ -552,10 +582,21 @@ async fn post_conversation_storage(
     Json(storage): Json<ConversationStorage>,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
+    if storage.enabled && storage.directory.trim().is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "success": false, "error": "启用对话记录前需要先配置保存目录" })),
+        )
+            .into_response());
+    }
+    let storage = ConversationStorage {
+        enabled: storage.enabled,
+        directory: storage.directory.trim().to_string(),
+    };
     let mut cfg = load_config(&state.root)?;
-    cfg.conversation_storage = storage;
+    cfg.conversation_storage = storage.clone();
     save_config(&state.root, &cfg)?;
-    Ok(Json(json!({ "success": true })).into_response())
+    Ok(Json(json!({ "success": true, "conversation_storage": storage })).into_response())
 }
 async fn open_conversation_storage() -> Json<Value> {
     Json(json!({ "success": false, "error": "Not implemented in Rust prototype" }))
@@ -766,7 +807,10 @@ async fn proxy_handler(
 async fn static_file(State(state): State<ServerState>, uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let relative = if path.is_empty() { "index.html" } else { path };
-    let file = state.root.join("public").join(safe_relative(relative));
+    let file = state
+        .static_root
+        .join("public")
+        .join(safe_relative(relative));
     match tokio::fs::read(&file).await {
         Ok(bytes) => {
             let mime = mime_guess::from_path(file)

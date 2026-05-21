@@ -139,6 +139,66 @@ async fn usage_api_reads_sqlite_usage_database() {
     assert_eq!(value["entries"][0]["request_id"], "req-http");
 }
 
+#[tokio::test]
+async fn conversation_storage_requires_user_selected_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    openrelay::config::ensure_files(dir.path()).unwrap();
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/conversation-storage")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"enabled": true, "directory": ""}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn conversation_storage_save_returns_saved_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    openrelay::config::ensure_files(dir.path()).unwrap();
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/conversation-storage")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"enabled": true, "directory": "D:\\OpenRelay\\conversations"})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["conversation_storage"]["enabled"], true);
+    assert_eq!(
+        value["conversation_storage"]["directory"],
+        "D:\\OpenRelay\\conversations"
+    );
+}
+
 async fn login_token(app: axum::Router) -> String {
     let response = app
         .oneshot(

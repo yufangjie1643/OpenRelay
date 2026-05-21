@@ -1,5 +1,7 @@
+use chrono::{TimeZone, Utc};
 use rusqlite::{params, Connection};
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -200,6 +202,19 @@ impl Database {
         Ok(out)
     }
 
+    pub fn import_usage_jsonl(&self, path: &Path) -> Result<usize, DatabaseError> {
+        let raw = std::fs::read_to_string(path)?;
+        let mut imported = 0usize;
+        for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            self.record_usage(&legacy_usage_log(&value))?;
+            imported += 1;
+        }
+        Ok(imported)
+    }
+
     fn create_tables(&self) -> Result<(), DatabaseError> {
         self.lock_conn()?.execute_batch(
             "PRAGMA journal_mode = WAL;
@@ -328,6 +343,63 @@ fn row_to_usage_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageLog> {
         error: row.get(13)?,
         path: row.get(14)?,
     })
+}
+
+fn legacy_usage_log(value: &Value) -> UsageLog {
+    UsageLog {
+        timestamp: legacy_timestamp(value),
+        request_id: string_field(value, "request_id"),
+        model: string_field(value, "model"),
+        key_name: string_field(value, "key_name"),
+        input_tokens: u64_field(value, "input_tokens"),
+        cached_tokens: u64_field(value, "cached_tokens"),
+        cached_write_tokens: u64_field(value, "cached_write_tokens"),
+        output_tokens: u64_field(value, "output_tokens"),
+        cost: f64_field(value, "cost"),
+        status: u64_field(value, "status").min(u16::MAX as u64) as u16,
+        duration_ms: u64_field(value, "duration_ms"),
+        stream: value
+            .get("stream")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        user_agent: string_field(value, "user_agent"),
+        error: string_field(value, "error"),
+        path: string_field(value, "path"),
+    }
+}
+
+fn legacy_timestamp(value: &Value) -> String {
+    if let Some(timestamp) = value
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .filter(|timestamp| !timestamp.trim().is_empty())
+    {
+        return timestamp.to_string();
+    }
+    for field in ["timestamp", "last_timestamp", "first_timestamp"] {
+        if let Some(millis) = value.get(field).and_then(Value::as_i64) {
+            if let Some(datetime) = Utc.timestamp_millis_opt(millis).single() {
+                return datetime.to_rfc3339();
+            }
+        }
+    }
+    Utc::now().to_rfc3339()
+}
+
+fn string_field(value: &Value, field: &str) -> String {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn u64_field(value: &Value, field: &str) -> u64 {
+    value.get(field).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn f64_field(value: &Value, field: &str) -> f64 {
+    value.get(field).and_then(Value::as_f64).unwrap_or(0.0)
 }
 
 fn round2(value: f64) -> f64 {

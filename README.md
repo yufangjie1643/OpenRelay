@@ -13,6 +13,7 @@ OpenRelay is a personal unified LLM API gateway. It is now a Rust-first Windows 
 - SQLite 用量数据库：记录请求数、token、缓存 token、费用、状态码、耗时、User-Agent 和请求 ID。
 - Windows 托盘：Rust exe 内置托盘图标，右键菜单为“打开管理面板”“重启服务”“退出 OpenRelay”。
 - 静态管理面板：`public/` 由 Rust 后端直接托管，不再依赖 Node.js 服务。
+- 用户数据目录：默认把配置、兼容 YAML、SQLite 数据库等运行数据保存到 `~\.openrelay`。
 
 ## 环境要求
 
@@ -67,6 +68,8 @@ http://localhost:18783
 
 登录后请立刻修改管理员密码，并在长期使用时设置 `JWT_SECRET` 环境变量。
 
+首次启动 Rust 版时，如果旧版 Node 项目目录里已有 `config.json`、`openrelay.db` 或 `usage.jsonl`，OpenRelay 会迁移到 `~\.openrelay`。已有的新数据目录配置不会被旧配置覆盖。
+
 ## 基本使用流程
 
 1. 打开管理面板并登录。
@@ -98,13 +101,30 @@ curl.exe http://localhost:18783/v1/chat/completions `
 
 ## 配置和运行态文件
 
-仓库中只提交模板和源码，以下文件为本地运行时生成或包含敏感信息，默认不会提交：
+默认数据目录：
+
+```text
+~\.openrelay
+```
+
+运行态文件会放在这个目录下：
 
 - `config.json`：本地真实配置，可能包含 API Key、管理员密码哈希和虚拟密钥。
 - `openrelay-config.yaml`：由管理面板根据配置自动生成。
 - `openrelay.db`：SQLite 用量数据库和后续运行态数据。
-- `conversations/`：历史兼容的对话记录目录，不再作为主要存储。
-- `target/`：Rust 构建产物。
+
+旧版根目录里的 `usage.jsonl` 会在首次迁移时导入 SQLite，之后不再作为主要存储。
+
+对话记录默认不保存。需要保留对话时，在管理面板中开启对话存储并填写明确的保存目录；OpenRelay 不会默认创建或迁移 `conversations/`。
+
+仓库中只提交模板和源码，以下文件不应提交：
+
+- `config.json`
+- `openrelay-config.yaml`
+- `openrelay.db`
+- `usage.jsonl`
+- `conversations/`
+- `target/`
 
 可从 `config.example.json` 了解配置结构，但不要把真实密钥写入模板文件。
 
@@ -113,18 +133,25 @@ curl.exe http://localhost:18783/v1/chat/completions `
 - `build.bat`：编译 release 版 `target\release\openrelay.exe`。
 - 发布包中直接运行 `openrelay.exe` 即可启动托盘和后端服务。
 
+常用环境变量：
+
+- `OPENRELAY_DATA_DIR`：覆盖默认数据目录。
+- `OPENRELAY_LEGACY_ROOT`：指定旧版数据迁移来源目录。
+- `OPENRELAY_STATIC_ROOT`：指定 `public/` 和 `assets/` 所在目录。
+- `OPENRELAY_NO_TRAY=1`：禁用托盘，以控制台方式运行。
+
 ## 测试
 
 ```powershell
 cargo test
 ```
 
-当前测试覆盖配置读写、代理路径兼容、模型解析、用量 token 提取、计费、SQLite 用量数据库、HTTP 路由、静态资源布局和 Rust 内置托盘约束。
+当前测试覆盖配置读写、旧版数据迁移、代理路径兼容、模型解析、用量 token 提取、计费、SQLite 用量数据库、HTTP 路由、静态资源布局和 Rust 内置托盘约束。
 
 ## 项目结构
 
 ```text
-src/                       Rust 后端、代理、配置、SQLite 数据库和托盘集成
+src/                       Rust 后端、代理、配置、数据迁移、SQLite 数据库和托盘集成
 tests/                     Rust 集成测试
 public/index.html          管理面板 UI
 public/login.html          登录页
