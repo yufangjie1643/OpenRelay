@@ -1,8 +1,8 @@
 @echo off
 chcp 65001 >nul
 echo ==========================================
-echo  LiteLLM Unified Web Proxy
-echo  Web UI / API: http://localhost:18783
+echo  OpenRelay
+echo  Personal unified LLM API gateway: http://localhost:18783
 echo ==========================================
 echo.
 

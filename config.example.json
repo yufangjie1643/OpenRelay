@@ -9,7 +9,7 @@
     ]
   },
   "general_settings": {
-    "master_key": "sk-litellm-master-key"
+    "master_key": "openrelay-master-key"
   },
   "admin": {
     "username": "admin",
@@ -321,7 +321,7 @@
       "name": "DeepSeek",
       "type": "anthropic",
       "api_key": "YOUR_API_KEY_HERE",
-      "user_agent": "OpenClaw-Gateway/1.0",
+      "user_agent": "OpenRelay-Gateway/1.0",
       "base_url": "https://api.deepseek.com/v1",
       "models": [
         {
@@ -339,7 +339,7 @@
       "name": "MiniMax",
       "type": "openai-custom",
       "api_key": "YOUR_API_KEY_HERE",
-      "user_agent": "OpenClaw-Gateway/1.0",
+      "user_agent": "OpenRelay-Gateway/1.0",
       "base_url": "https://api.minimaxi.com/v1",
       "models": [
         {

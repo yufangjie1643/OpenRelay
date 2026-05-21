@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LiteLLM Proxy - Login</title>
+<title>OpenRelay - Login</title>
 <style>
   :root{--bg:#101211;--card:#181c1a;--text:#eef3ef;--muted:#9aa79e;--accent:#57d6b3;--accent2:#e5bd55;--border:#303932;--input:#0c0f0d;}
   *{box-sizing:border-box;margin:0;padding:0}
@@ -22,7 +22,8 @@
 </head>
 <body>
 <div class="login-box">
-  <h1>LiteLLM Proxy</h1>
+  <h1>OpenRelay</h1>
+  <p>个人统一 LLM API 网关</p>
   <p>管理面板登录</p>
   <div class="form-group">
     <label>用户名</label>
@@ -49,7 +50,7 @@ async function login() {
     });
     const data = await res.json();
     if (data.success) {
-      localStorage.setItem('litellm_token', data.token);
+      localStorage.setItem('openrelay_token', data.token);
       window.location.href = '/';
     } else {
       errorEl.textContent = data.error || '登录失败';

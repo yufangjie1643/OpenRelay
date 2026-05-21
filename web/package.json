@@ -1,7 +1,7 @@
 {
-  "name": "litellm-proxy-webui",
+  "name": "openrelay-webui",
   "version": "1.1.0",
-  "description": "LiteLLM Proxy Visual Config Manager with Auth, Pricing & Usage Tracking",
+  "description": "OpenRelay personal unified LLM API gateway with auth, pricing and usage tracking",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

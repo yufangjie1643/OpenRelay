@@ -1,6 +1,6 @@
 const assert = require('assert');
 
-process.env.LITELLM_WEBUI_TEST = '1';
+process.env.OPENRELAY_TEST = '1';
 const proxy = require('./server');
 
 assert.strictEqual(typeof proxy.buildUpstreamUrl, 'function');

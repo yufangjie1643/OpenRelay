@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LiteLLM Proxy 管理面板</title>
+<title>OpenRelay 管理面板</title>
 <script>
 (function() {
-  const key = 'litellm_theme_mode';
+  const key = 'openrelay_theme_mode';
   let mode = 'system';
   try { mode = localStorage.getItem(key) || 'system'; } catch {}
   const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -188,7 +188,7 @@
 </head>
 <body>
 <header>
-  <h1>LiteLLM Proxy 管理面板</h1>
+  <h1>OpenRelay 管理面板</h1>
   <div class="user">
     <span id="userName">admin</span>
     <button onclick="logout()">退出登录</button>
@@ -390,7 +390,7 @@
         <div class="form-group">
           <label>保存目录（绝对路径）</label>
           <div class="path-control">
-            <input type="text" id="convDirectory" placeholder="例如: D:\\litellm-conversations">
+            <input type="text" id="convDirectory" placeholder="例如: D:\\openrelay-conversations">
             <button type="button" class="btn btn-secondary" id="openConvFolderBtn" onclick="openConversationFolder()">打开文件夹</button>
           </div>
           <p class="hint">目录不存在会自动创建。留空则不保存。</p>
@@ -419,7 +419,7 @@
     <div class="form-group">
       <label>User-Agent</label>
       <select id="pUASelect" onchange="onUAChange()">
-        <option value="OpenClaw-Gateway/1.0">OpenClaw-Gateway/1.0</option>
+        <option value="OpenRelay-Gateway/1.0">OpenRelay-Gateway/1.0</option>
         <option value="opencode/1.0.0">opencode/1.0.0 (OpenCode CLI)</option>
         <option value="claude-cli/2.0.0 (external, cli)">claude-cli/2.0.0 (Claude Code)</option>
         <option value="codex_cli_rs/0.1.0">codex_cli_rs/0.1.0 (OpenAI Codex CLI)</option>
@@ -478,14 +478,14 @@
 
 <script src="/vendor/js-yaml/js-yaml.min.js"></script>
 <script>
-const token = localStorage.getItem('litellm_token');
+const token = localStorage.getItem('openrelay_token');
 if (!token) window.location.href = '/login.html';
 
-let config = { providers: [], pricing: {}, limits: {}, virtual_keys: [], router_settings: { timeout: 60 }, litellm_settings: { drop_params: true, allowed_headers: ['*'] }, general_settings: { master_key: 'sk-litellm-master-key' } };
+let config = { providers: [], pricing: {}, limits: {}, virtual_keys: [], router_settings: { timeout: 60 }, litellm_settings: { drop_params: true, allowed_headers: ['*'] }, general_settings: { master_key: 'openrelay-master-key' } };
 let editingProviderIndex = -1, editingModelIndex = -1, editingVkIndex = -1;
 let detectedModels = [];
 let providerTested = false, providerTestedModels = [], providerOriginalKey = '', providerOriginalBase = '';  // for provider modal
-const THEME_STORAGE_KEY = 'litellm_theme_mode';
+const THEME_STORAGE_KEY = 'openrelay_theme_mode';
 const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 let themeControlsBound = false;
 
@@ -537,7 +537,7 @@ async function api(path, opts = {}) {
   opts.headers = opts.headers || {};
   opts.headers['Authorization'] = 'Bearer ' + token;
   const res = await fetch(path, opts);
-  if (res.status === 401) { localStorage.removeItem('litellm_token'); window.location.href = '/login.html'; }
+  if (res.status === 401) { localStorage.removeItem('openrelay_token'); window.location.href = '/login.html'; }
   return res;
 }
 
@@ -609,7 +609,7 @@ function renderProviders() {
       <div class="provider-meta">
         <span>URL ${escapeHtml(prov.base_url || '默认')}</span>
         <span>Key ${escapeHtml(keyMasked)}</span>
-        <span>UA ${escapeHtml(prov.user_agent || 'OpenClaw-Gateway/1.0')}</span>
+        <span>UA ${escapeHtml(prov.user_agent || 'OpenRelay-Gateway/1.0')}</span>
       </div>
       <div class="provider-models">
         <table><thead><tr><th>模型别名</th><th>操作</th></tr></thead><tbody>${modelsHtml || '<tr><td colspan="2" style="color:var(--muted)">暂无模型，编辑后测试连通性可自动获取</td></tr>'}</tbody></table>
@@ -635,7 +635,7 @@ function flattenForYAML(cfg) {
   for (const prov of cfg.providers || []) {
     for (const m of prov.models || []) {
       const prefix = prov.type === 'gemini' ? 'gemini' : prov.type === 'anthropic' ? 'anthropic' : 'openai';
-      const entry = { model_name: m.model_name, litellm_params: { model: `${prefix}/${m.model_id}`, api_key: prov.api_key, extra_headers: { 'User-Agent': prov.user_agent || 'OpenClaw-Gateway/1.0' } } };
+      const entry = { model_name: m.model_name, litellm_params: { model: `${prefix}/${m.model_id}`, api_key: prov.api_key, extra_headers: { 'User-Agent': prov.user_agent || 'OpenRelay-Gateway/1.0' } } };
       if (prov.base_url) entry.litellm_params.api_base = prov.base_url;
       out.model_list.push(entry);
     }
@@ -678,7 +678,7 @@ function openProviderModal() {
   document.getElementById('pType').value = 'openai';
   document.getElementById('pBase').value = '';
   document.getElementById('pKey').value = 'os.environ/OPENAI_API_KEY';
-  setUAValue('OpenClaw-Gateway/1.0');
+  setUAValue('OpenRelay-Gateway/1.0');
   document.getElementById('providerModal').classList.add('active');
 }
 function editProvider(i) {
@@ -693,7 +693,7 @@ function editProvider(i) {
   document.getElementById('pType').value = prov.type;
   document.getElementById('pBase').value = prov.base_url || '';
   document.getElementById('pKey').value = prov.api_key;
-  setUAValue(prov.user_agent || 'OpenClaw-Gateway/1.0');
+  setUAValue(prov.user_agent || 'OpenRelay-Gateway/1.0');
   document.getElementById('testResult').innerHTML = '<span style="color:var(--ok)">已验证渠道</span>';
   document.getElementById('fetchedModels').style.display = 'none';
   document.getElementById('providerModal').classList.add('active');
@@ -1107,7 +1107,7 @@ async function mergeUsage() {
   else alert('归档失败: ' + (data.error || '未知错误'));
 }
 function exportUsageCsv() {
-  const token = localStorage.getItem('litellm_token');
+  const token = localStorage.getItem('openrelay_token');
   const a = document.createElement('a');
   a.href = '/api/usage/export?format=csv';
   a.setAttribute('download', 'usage-export.csv');
@@ -1583,7 +1583,7 @@ async function openConversationFolder() {
     btn.textContent = originalText;
   }
 }
-function logout() { localStorage.removeItem('litellm_token'); window.location.href = '/login.html'; }
+function logout() { localStorage.removeItem('openrelay_token'); window.location.href = '/login.html'; }
 function toast(msg) { const el = document.getElementById('toast'); el.textContent = msg; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2000); }
 load();
 </script>

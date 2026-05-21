@@ -217,9 +217,9 @@ static void restart_service(void) {
   stop_service();
   Sleep(350);
   if (start_service(error, BUF_CCH)) {
-    show_balloon(L"LiteLLM Proxy", L"服务已重启并加载最新后端代码。", NIIF_INFO);
+    show_balloon(L"OpenRelay", L"服务已重启并加载最新后端代码。", NIIF_INFO);
   } else {
-    show_message(L"LiteLLM Proxy", error[0] ? error : L"重启失败。", MB_OK | MB_ICONERROR, 7000);
+    show_message(L"OpenRelay", error[0] ? error : L"重启失败。", MB_OK | MB_ICONERROR, 7000);
   }
 }
 
@@ -242,9 +242,9 @@ static void update_tray_tip(void) {
   DWORD code = 0;
 
   if (g_service.hProcess && GetExitCodeProcess(g_service.hProcess, &code) && code == STILL_ACTIVE) {
-    wcsncpy(g_nid.szTip, L"LiteLLM Proxy 运行中 - http://localhost:18783", sizeof(g_nid.szTip) / sizeof(g_nid.szTip[0]) - 1);
+    wcsncpy(g_nid.szTip, L"OpenRelay 运行中 - http://localhost:18783", sizeof(g_nid.szTip) / sizeof(g_nid.szTip[0]) - 1);
   } else {
-    wcsncpy(g_nid.szTip, L"LiteLLM Proxy 已停止 - 右键可重启", sizeof(g_nid.szTip) / sizeof(g_nid.szTip[0]) - 1);
+    wcsncpy(g_nid.szTip, L"OpenRelay 已停止 - 右键可重启", sizeof(g_nid.szTip) / sizeof(g_nid.szTip[0]) - 1);
     g_service_running = 0;
   }
   g_nid.uFlags = NIF_TIP;
@@ -285,7 +285,7 @@ static int add_tray_icon(HWND hwnd) {
   g_nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
   g_nid.uCallbackMessage = WM_TRAYICON;
   g_nid.hIcon = icon;
-  wcsncpy(g_nid.szTip, L"LiteLLM Proxy 运行中 - http://localhost:18783", sizeof(g_nid.szTip) / sizeof(g_nid.szTip[0]) - 1);
+  wcsncpy(g_nid.szTip, L"OpenRelay 运行中 - http://localhost:18783", sizeof(g_nid.szTip) / sizeof(g_nid.szTip[0]) - 1);
 
   return Shell_NotifyIconW(NIM_ADD, &g_nid);
 }
@@ -340,7 +340,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE prev_instance, PWSTR cmd_line,
   (void)show_cmd;
 
   if (!get_base_dir(g_base_dir, BUF_CCH)) {
-    show_message(L"LiteLLM Proxy", L"Unable to locate the manager directory.", MB_OK | MB_ICONERROR, 5000);
+    show_message(L"OpenRelay", L"Unable to locate the manager directory.", MB_OK | MB_ICONERROR, 5000);
     return 1;
   }
 
@@ -348,9 +348,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE prev_instance, PWSTR cmd_line,
     return check_environment(g_base_dir);
   }
 
-  mutex = CreateMutexW(NULL, TRUE, L"Local\\LiteLLMProxyTrayManager");
+  mutex = CreateMutexW(NULL, TRUE, L"Local\\OpenRelayTrayManager");
   if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
-    show_message(L"LiteLLM Proxy", L"LiteLLM Proxy 管理器已经在运行。", MB_OK | MB_ICONINFORMATION, 4000);
+    show_message(L"OpenRelay", L"OpenRelay 管理器已经在运行。", MB_OK | MB_ICONINFORMATION, 4000);
     if (mutex) CloseHandle(mutex);
     return 0;
   }
@@ -359,7 +359,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE prev_instance, PWSTR cmd_line,
   join_path(g_server_path, BUF_CCH, g_base_dir, L"web\\server.js");
 
   if (!start_service(errors, BUF_CCH)) {
-    show_message(L"LiteLLM Proxy", errors[0] ? errors : L"服务启动失败。", MB_OK | MB_ICONERROR, 7000);
+    show_message(L"OpenRelay", errors[0] ? errors : L"服务启动失败。", MB_OK | MB_ICONERROR, 7000);
     CloseHandle(mutex);
     return 1;
   }
@@ -367,19 +367,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE prev_instance, PWSTR cmd_line,
   ZeroMemory(&wc, sizeof(wc));
   wc.lpfnWndProc = window_proc;
   wc.hInstance = instance;
-  wc.lpszClassName = L"LiteLLMProxyTrayManagerWindow";
+  wc.lpszClassName = L"OpenRelayTrayManagerWindow";
   if (!RegisterClassW(&wc)) {
     format_last_error(errors, BUF_CCH, L"RegisterClassW");
-    show_message(L"LiteLLM Proxy", errors, MB_OK | MB_ICONERROR, 7000);
+    show_message(L"OpenRelay", errors, MB_OK | MB_ICONERROR, 7000);
     stop_service();
     CloseHandle(mutex);
     return 1;
   }
 
-  g_hwnd = CreateWindowExW(0, wc.lpszClassName, L"LiteLLM Proxy", 0, 0, 0, 0, 0, NULL, NULL, instance, NULL);
+  g_hwnd = CreateWindowExW(0, wc.lpszClassName, L"OpenRelay", 0, 0, 0, 0, 0, NULL, NULL, instance, NULL);
   if (!g_hwnd) {
     format_last_error(errors, BUF_CCH, L"CreateWindowExW");
-    show_message(L"LiteLLM Proxy", errors, MB_OK | MB_ICONERROR, 7000);
+    show_message(L"OpenRelay", errors, MB_OK | MB_ICONERROR, 7000);
     stop_service();
     CloseHandle(mutex);
     return 1;
@@ -387,14 +387,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE prev_instance, PWSTR cmd_line,
 
   if (!add_tray_icon(g_hwnd)) {
     format_last_error(errors, BUF_CCH, L"Shell_NotifyIconW");
-    show_message(L"LiteLLM Proxy", errors, MB_OK | MB_ICONERROR, 7000);
+    show_message(L"OpenRelay", errors, MB_OK | MB_ICONERROR, 7000);
     DestroyWindow(g_hwnd);
     CloseHandle(mutex);
     return 1;
   }
 
   SetTimer(g_hwnd, TIMER_STATUS, 5000, NULL);
-  show_balloon(L"LiteLLM Proxy", L"管理器已启动\nWeb UI / API: http://localhost:18783", NIIF_INFO);
+  show_balloon(L"OpenRelay", L"管理器已启动\nWeb UI / API: http://localhost:18783", NIIF_INFO);
 
   while (GetMessageW(&msg, NULL, 0, 0) > 0) {
     TranslateMessage(&msg);

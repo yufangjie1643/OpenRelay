@@ -67,10 +67,10 @@ const PROXY_BODY_ROUTES = ['/proxy', '/v1', ...COMPATIBLE_PROXY_ROUTES.map(route
 const activeConnections = new Map();
 
 const CONFIG_JSON = path.join(PROJECT_ROOT, 'config.json');
-const CONFIG_YAML = path.join(PROJECT_ROOT, 'litellm-config.yaml');
+const CONFIG_YAML = path.join(PROJECT_ROOT, 'openrelay-config.yaml');
 const USAGE_FILE = path.join(PROJECT_ROOT, 'usage.jsonl');
 const USAGE_RECENT_DETAIL_LIMIT = 1000;
-const JWT_SECRET = process.env.JWT_SECRET || 'litellm-webui-secret-change-me';
+const JWT_SECRET = process.env.JWT_SECRET || 'openrelay-webui-secret-change-me';
 
 app.use(PROXY_BODY_ROUTES, express.raw({ type: '*/*', limit: '200mb' }));
 app.use(express.json({ limit: '50mb' }));
@@ -106,7 +106,7 @@ function migrateIfNeeded(cfg) {
     const p = item.litellm_params;
     const base = p.api_base || '';
     const key = p.api_key || '';
-    const ua = (p.extra_headers && p.extra_headers['User-Agent']) || 'OpenClaw-Gateway/1.0';
+    const ua = (p.extra_headers && p.extra_headers['User-Agent']) || 'OpenRelay-Gateway/1.0';
     const realModel = p.model || '';
     const parts = realModel.split('/');
     const type = parts[0] || 'openai';
@@ -169,7 +169,7 @@ function flattenProvidersToLiteLLM(cfg) {
         litellm_params: {
           model: `${prefix}/${m.model_id}`,
           api_key: prov.api_key,
-          extra_headers: { 'User-Agent': prov.user_agent || 'OpenClaw-Gateway/1.0' }
+          extra_headers: { 'User-Agent': prov.user_agent || 'OpenRelay-Gateway/1.0' }
         }
       };
       if (prov.base_url) entry.litellm_params.api_base = prov.base_url;
@@ -192,7 +192,7 @@ function getModelListFromProviders(cfg) {
           model: `${prefix}/${m.model_id}`,
           api_key: prov.api_key,
           api_base: prov.base_url || undefined,
-          extra_headers: { 'User-Agent': prov.user_agent || 'OpenClaw-Gateway/1.0' }
+          extra_headers: { 'User-Agent': prov.user_agent || 'OpenRelay-Gateway/1.0' }
         }
       });
     }
@@ -210,7 +210,7 @@ function ensureFiles() {
       virtual_keys: [],
       router_settings: { timeout: 60 },
       litellm_settings: { drop_params: true, allowed_headers: ['*'] },
-      general_settings: { master_key: 'sk-litellm-master-key' }
+      general_settings: { master_key: 'openrelay-master-key' }
     };
     saveConfig(defaultCfg);
   }
@@ -815,7 +815,7 @@ app.post('/api/test-provider', authMiddleware, async (req, res) => {
   }
 
   try {
-    let url, headers = { 'User-Agent': user_agent || 'OpenClaw-Gateway/1.0' };
+    let url, headers = { 'User-Agent': user_agent || 'OpenRelay-Gateway/1.0' };
     if (type === 'gemini') {
       url = `${baseUrl}/models?key=${key}`;
     } else {
@@ -866,7 +866,7 @@ app.get('/api/detect-models', authMiddleware, async (req, res) => {
 
     try {
       const response = await fetch(`${baseUrl}/models`, {
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'User-Agent': prov.user_agent || 'OpenClaw-Gateway/1.0' },
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'User-Agent': prov.user_agent || 'OpenRelay-Gateway/1.0' },
         signal: AbortSignal.timeout(15000)
       });
       if (!response.ok) {
@@ -1344,13 +1344,13 @@ function startServer() {
   ensureFiles();
   loadUsageIndex();
   return app.listen(PORT, '0.0.0.0', () => {
-    console.log(`LiteLLM Web UI + Proxy running at http://localhost:${PORT}`);
+    console.log(`OpenRelay running at http://localhost:${PORT}`);
     console.log(`Proxy endpoints: http://localhost:${PORT}/proxy/v1/chat/completions, /proxy/v1/responses, /proxy/v1/embeddings`);
     if (TRAY_ENABLED) initTray();
   });
 }
 
-if (require.main === module && process.env.LITELLM_WEBUI_TEST !== '1') {
+if (require.main === module && process.env.OPENRELAY_TEST !== '1') {
   startServer();
 }
 
@@ -1483,8 +1483,8 @@ function initTray() {
     const systray = new SysTray({
       menu: {
         icon: iconBase64,
-        title: 'LiteLLM Proxy',
-        tooltip: 'LiteLLM Proxy 运行中',
+        title: 'OpenRelay',
+        tooltip: 'OpenRelay 运行中',
         items: [
           { title: '打开 Web UI', tooltip: '在浏览器中打开管理面板', checked: false, enabled: true },
           { title: '重启服务', tooltip: '重新加载后端代码并重启本地代理', checked: false, enabled: true },
@@ -1510,7 +1510,7 @@ function initTray() {
     setInterval(() => {
       const stats = computeUsageStats(usageIndex);
       const rate = Number(stats.cacheHitRate || 0).toFixed(1);
-      const title = `LiteLLM Proxy | 成本: ¥${stats.totalCost.toFixed(2)} | 缓存: ${rate}%`;
+      const title = `OpenRelay | 成本: ¥${stats.totalCost.toFixed(2)} | 缓存: ${rate}%`;
       if (typeof systray.setTitle === 'function') systray.setTitle(title);
     }, 30000);
   } catch (e) {

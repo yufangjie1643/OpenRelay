@@ -14,6 +14,7 @@ config.json
 
 # Auto-generated files
 litellm-config.yaml
+openrelay-config.yaml
 *.res
 
 # OS files

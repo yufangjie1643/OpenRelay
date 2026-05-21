@@ -1,4 +1,4 @@
-# LiteLLM Unified Web Proxy Setup Script
+# OpenRelay setup script
 # Installs the Node.js admin UI / proxy dependencies.
 
 $ErrorActionPreference = "Stop"
@@ -6,7 +6,7 @@ $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectDir
 
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  LiteLLM Unified Web Proxy Setup" -ForegroundColor Cyan
+Write-Host "  OpenRelay Setup" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
@@ -26,5 +26,5 @@ Pop-Location
 
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host "  Setup complete!" -ForegroundColor Green
-Write-Host "  Run .\start.bat to start http://localhost:18783." -ForegroundColor Green
+Write-Host "  Run .\start.bat to start OpenRelay at http://localhost:18783." -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green

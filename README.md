@@ -1,12 +1,14 @@
-# LiteLLM Proxy WebUI
+# OpenRelay
 
-一个 Windows 优先的 LiteLLM / OpenAI 兼容统一代理，内置浏览器管理面板、模型配置、虚拟密钥、用量统计、对话记录和活跃连接管理。服务默认监听 `http://localhost:18783`，不需要再启动单独的 LiteLLM 进程或额外的 `4000` 端口。
+个人统一 LLM API 网关。
+
+OpenRelay is a personal unified LLM API gateway. It provides a Windows-first OpenAI-compatible proxy with a local admin panel, model routing, virtual keys, usage tracking, conversation records, and active connection management. The service listens on `http://localhost:18783` by default and does not require any separate proxy process or an extra `4000` port.
 
 ## 功能特性
 
 - 统一 OpenAI 兼容代理：支持 `/v1/*`、`/proxy/v1/*` 以及常见无前缀兼容路径。
 - 多服务商配置：在管理面板中维护服务商、模型别名、上游模型 ID、Base URL、API Key 和 User-Agent。
-- 自动生成 LiteLLM YAML：保存配置时同步写入本地 `litellm-config.yaml`。
+- 自动生成兼容配置 YAML：保存配置时同步写入本地 `openrelay-config.yaml`，便于迁移和排查。
 - 虚拟密钥：支持按密钥设置模型白名单、预算、RPM、启用状态和过期时间。
 - 用量统计：记录请求数、输入/输出 token、缓存 token、费用、状态码、耗时和 User-Agent。
 - 对话记录：可选保存请求/响应，并提供阅读器、原始 JSON、流式输出解析和删除功能。
@@ -89,7 +91,7 @@ curl.exe http://localhost:18783/v1/chat/completions `
 仓库中只提交模板和源码，以下文件为本地运行时生成或包含敏感信息，默认不会提交：
 
 - `config.json`：本地真实配置，可能包含 API Key、管理员密码哈希和虚拟密钥。
-- `litellm-config.yaml`：由管理面板根据配置自动生成。
+- `openrelay-config.yaml`：由管理面板根据配置自动生成。
 - `usage.jsonl`：用量日志。
 - `conversations/`：可选对话记录目录。
 - `web/node_modules/`：Node.js 依赖。
@@ -146,7 +148,7 @@ test/                      辅助分析脚本
 
 ## 安全建议
 
-- 不要提交真实 API Key、`config.json`、`litellm-config.yaml`、`usage.jsonl` 或 `conversations/`。
+- 不要提交真实 API Key、`config.json`、`openrelay-config.yaml`、`usage.jsonl` 或 `conversations/`。
 - 首次启动后立即修改默认管理员密码。
 - 共享或长期运行时设置强随机 `JWT_SECRET`。
 - 修改默认 `general_settings.master_key`。
