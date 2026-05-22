@@ -368,34 +368,40 @@ pub fn extract_usage_tokens(data: &Value, fallback_input: u64) -> UsageTokens {
         usage.pointer("/candidates_token_count"),
     ])
     .unwrap_or(0);
-    let cached = first_u64(&[
-        usage.pointer("/prompt_tokens_details/cached_tokens"),
-        usage.pointer("/input_tokens_details/cached_tokens"),
-        usage.pointer("/cached_tokens"),
+    let cache_hit = first_u64(&[
         usage.pointer("/prompt_cache_hit_tokens"),
+        usage.pointer("/prompt_tokens_details/prompt_cache_hit_tokens"),
+        usage.pointer("/input_tokens_details/prompt_cache_hit_tokens"),
         usage.pointer("/cache_read_input_tokens"),
-    ])
-    .unwrap_or(0);
-    let cache_write = first_u64(&[
-        usage.pointer("/prompt_tokens_details/cache_write_tokens"),
-        usage.pointer("/input_tokens_details/cache_write_tokens"),
-        usage.pointer("/cache_creation_input_tokens"),
+        usage.pointer("/prompt_tokens_details/cache_read_input_tokens"),
+        usage.pointer("/input_tokens_details/cache_read_input_tokens"),
+    ]);
+    let cache_miss = first_u64(&[
         usage.pointer("/prompt_cache_miss_tokens"),
-    ])
-    .unwrap_or(0);
-    let input = if usage.get("prompt_cache_hit_tokens").is_some()
-        || usage.get("prompt_cache_miss_tokens").is_some()
-    {
-        usage
-            .get("prompt_cache_hit_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            + usage
-                .get("prompt_cache_miss_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-    } else {
-        prompt
+        usage.pointer("/prompt_tokens_details/prompt_cache_miss_tokens"),
+        usage.pointer("/input_tokens_details/prompt_cache_miss_tokens"),
+    ]);
+    let cached = cache_hit.unwrap_or_else(|| {
+        first_u64(&[
+            usage.pointer("/prompt_tokens_details/cached_tokens"),
+            usage.pointer("/input_tokens_details/cached_tokens"),
+            usage.pointer("/cached_tokens"),
+        ])
+        .unwrap_or(0)
+    });
+    let cache_write = cache_miss.unwrap_or_else(|| {
+        first_u64(&[
+            usage.pointer("/prompt_tokens_details/cache_write_tokens"),
+            usage.pointer("/input_tokens_details/cache_write_tokens"),
+            usage.pointer("/cache_creation_input_tokens"),
+            usage.pointer("/prompt_tokens_details/cache_creation_input_tokens"),
+            usage.pointer("/input_tokens_details/cache_creation_input_tokens"),
+        ])
+        .unwrap_or(0)
+    });
+    let input = match (cache_hit, cache_miss) {
+        (Some(hit), Some(miss)) => hit + miss,
+        _ => prompt,
     };
     UsageTokens {
         input_tokens: input,

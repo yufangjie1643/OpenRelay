@@ -148,6 +148,48 @@ fn extracts_openai_and_responses_usage() {
 }
 
 #[test]
+fn extracts_deepseek_cache_hit_tokens_from_details() {
+    let deepseek = extract_usage_tokens(
+        &json!({
+            "usage": {
+                "prompt_tokens": 3_539_090,
+                "completion_tokens": 19_312,
+                "total_tokens": 3_558_402,
+                "prompt_tokens_details": {
+                    "cached_tokens": 0,
+                    "prompt_cache_hit_tokens": 3_500_000,
+                    "prompt_cache_miss_tokens": 39_090
+                }
+            }
+        }),
+        1,
+    );
+
+    assert_eq!(deepseek.input_tokens, 3_539_090);
+    assert_eq!(deepseek.output_tokens, 19_312);
+    assert_eq!(deepseek.cached_tokens, 3_500_000);
+    assert_eq!(deepseek.cached_write_tokens, 39_090);
+
+    let root_fields = extract_usage_tokens(
+        &json!({
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 8,
+                "prompt_tokens_details": { "cached_tokens": 0 },
+                "prompt_cache_hit_tokens": 60,
+                "prompt_cache_miss_tokens": 40
+            }
+        }),
+        1,
+    );
+
+    assert_eq!(root_fields.input_tokens, 100);
+    assert_eq!(root_fields.output_tokens, 8);
+    assert_eq!(root_fields.cached_tokens, 60);
+    assert_eq!(root_fields.cached_write_tokens, 40);
+}
+
+#[test]
 fn extracts_gemini_usage_metadata() {
     let gemini = extract_usage_tokens(
         &json!({"usageMetadata": {"promptTokenCount": 23, "candidatesTokenCount": 11, "totalTokenCount": 34}}),
