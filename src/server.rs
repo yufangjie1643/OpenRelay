@@ -1,7 +1,7 @@
 use crate::config::{
     load_config, save_config, AppConfig, ConfigError, ConversationStorage, VirtualKeyConfig,
 };
-use crate::database::{Database, DatabaseError, UsageLog};
+use crate::database::{ConversationEntry, Database, DatabaseError, UsageLog};
 use crate::migration::{migrate_legacy_data, MigrationError};
 use crate::paths::{data_root_from_env, static_root_from_env, AppPaths};
 use crate::proxy::{
@@ -22,7 +22,7 @@ use futures_util::Stream;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
@@ -708,6 +708,7 @@ async fn merge_usage(
 }
 async fn get_conversations(
     State(state): State<ServerState>,
+    axum::extract::Query(query): axum::extract::Query<UsageQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ServerError> {
     require_admin(&state, &headers)?;
@@ -716,16 +717,27 @@ async fn get_conversations(
         return Ok(Json(json!({ "enabled": false, "entries": [] })).into_response());
     }
     let directory = PathBuf::from(storage.directory.trim());
-    let entries = tokio::task::spawn_blocking({
+    let page = tokio::task::spawn_blocking({
+        let database = state.database.clone();
         let directory = directory.clone();
-        move || list_conversation_entries(&directory)
+        move || {
+            sync_conversation_index(&database, &directory)?;
+            database
+                .conversation_page(
+                    &directory,
+                    query.page.unwrap_or(1),
+                    query.page_size.unwrap_or(20),
+                )
+                .map_err(ServerError::Database)
+        }
     })
     .await
     .map_err(|err| DatabaseError::BlockingTask(err.to_string()))??;
     Ok(Json(json!({
         "enabled": true,
         "directory": directory.to_string_lossy(),
-        "entries": entries
+        "entries": page.entries,
+        "pagination": page.pagination
     }))
     .into_response())
 }
@@ -752,9 +764,17 @@ async fn delete_conversation(
     let Some(path) = conversation_file_path(&state.current_config().await, &filename) else {
         return Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "Not found" }))).into_response());
     };
+    let database = state.database.clone();
+    let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let removed = tokio::task::spawn_blocking(move || match std::fs::remove_file(&path) {
-        Ok(()) => Ok(true),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Ok(()) => {
+            database.remove_conversation_index(&directory, &filename)?;
+            Ok(true)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            database.remove_conversation_index(&directory, &filename)?;
+            Ok(false)
+        }
         Err(err) => Err(ServerError::Io(err)),
     })
     .await
@@ -816,38 +836,126 @@ async fn abort_connection(
     }
 }
 
-fn list_conversation_entries(directory: &Path) -> Result<Vec<Value>, ServerError> {
+fn sync_conversation_index(database: &Database, directory: &Path) -> Result<(), ServerError> {
+    let indexed = database.conversation_index_files(directory)?;
     if !directory.exists() {
-        return Ok(Vec::new());
+        for filename in indexed.keys() {
+            database.remove_conversation_index(directory, filename)?;
+        }
+        return Ok(());
     }
-    let mut entries = Vec::new();
+    let mut seen = BTreeSet::new();
     for entry in std::fs::read_dir(directory)? {
         let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        let Ok(value) = read_conversation_file(&path) else {
-            continue;
-        };
         let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        entries.push(json!({
-            "filename": filename,
-            "timestamp": value.get("timestamp").cloned().unwrap_or(json!("")),
-            "model": value.get("model").cloned().unwrap_or(json!("")),
-            "key_name": value.get("key_name").cloned().unwrap_or(json!("master")),
-            "request_id": value.get("request_id").cloned().unwrap_or(json!(""))
-        }));
+        let filename = filename.to_string();
+        seen.insert(filename.clone());
+        let metadata = entry.metadata()?;
+        let file_size = metadata.len();
+        let modified_at = file_modified_at(&metadata);
+        if indexed
+            .get(&filename)
+            .is_some_and(|(size, modified)| *size == file_size && *modified == modified_at)
+        {
+            continue;
+        }
+        let fallback_timestamp = unix_milliseconds_to_rfc3339(modified_at);
+        let index_entry =
+            conversation_index_entry_from_file(database, &path, &filename, &fallback_timestamp)?;
+        database.upsert_conversation_index(directory, &index_entry, file_size, modified_at)?;
     }
-    entries.sort_by(|left, right| {
-        right
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .cmp(&left.get("timestamp").and_then(Value::as_str))
-    });
-    Ok(entries)
+    for filename in indexed.keys() {
+        if !seen.contains(filename) {
+            database.remove_conversation_index(directory, filename)?;
+        }
+    }
+    Ok(())
+}
+
+fn conversation_index_entry_from_file(
+    database: &Database,
+    path: &Path,
+    filename: &str,
+    fallback_timestamp: &str,
+) -> Result<ConversationEntry, ServerError> {
+    let request_id = conversation_request_id_from_filename(filename).unwrap_or_default();
+    if !request_id.is_empty() {
+        if let Some(entry) = database.conversation_usage_metadata(&request_id, filename)? {
+            return Ok(entry);
+        }
+    }
+    if let Ok(value) = read_conversation_file(path) {
+        return Ok(conversation_index_entry_from_value(
+            filename,
+            &value,
+            &request_id,
+            fallback_timestamp,
+        ));
+    }
+    Ok(ConversationEntry {
+        filename: filename.to_string(),
+        timestamp: fallback_timestamp.to_string(),
+        model: String::new(),
+        key_name: "master".to_string(),
+        request_id,
+    })
+}
+
+fn conversation_index_entry_from_value(
+    filename: &str,
+    value: &Value,
+    fallback_request_id: &str,
+    fallback_timestamp: &str,
+) -> ConversationEntry {
+    ConversationEntry {
+        filename: filename.to_string(),
+        timestamp: string_field(value, "timestamp")
+            .unwrap_or_else(|| fallback_timestamp.to_string()),
+        model: string_field(value, "model").unwrap_or_default(),
+        key_name: string_field(value, "key_name").unwrap_or_else(|| "master".to_string()),
+        request_id: string_field(value, "request_id")
+            .unwrap_or_else(|| fallback_request_id.to_string()),
+    }
+}
+
+fn conversation_request_id_from_filename(filename: &str) -> Option<String> {
+    let stem = filename.strip_suffix(".json")?;
+    let (_, request_id) = stem.split_once('-')?;
+    if request_id.trim().is_empty() {
+        None
+    } else {
+        Some(request_id.to_string())
+    }
+}
+
+fn string_field(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn file_modified_at(metadata: &std::fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+fn unix_milliseconds_to_rfc3339(milliseconds: i64) -> String {
+    chrono::DateTime::<Utc>::from_timestamp_millis(milliseconds)
+        .unwrap_or_else(Utc::now)
+        .to_rfc3339()
 }
 
 fn read_conversation_file(path: &Path) -> Result<Value, ServerError> {
@@ -903,22 +1011,34 @@ fn conversation_trace(
 }
 
 async fn save_conversation_record_async(
+    database: Database,
     trace: ConversationTrace,
     output: Option<Value>,
     output_raw: Option<String>,
 ) -> Result<(), ServerError> {
-    tokio::task::spawn_blocking(move || write_conversation_record(trace, output, output_raw))
-        .await
-        .map_err(|err| DatabaseError::BlockingTask(err.to_string()))??;
+    tokio::task::spawn_blocking(move || {
+        write_conversation_record(database, trace, output, output_raw)
+    })
+    .await
+    .map_err(|err| DatabaseError::BlockingTask(err.to_string()))??;
     Ok(())
 }
 
 fn write_conversation_record(
+    database: Database,
     trace: ConversationTrace,
     output: Option<Value>,
     output_raw: Option<String>,
 ) -> Result<(), ServerError> {
     std::fs::create_dir_all(&trace.directory)?;
+    let index_entry = ConversationEntry {
+        filename: trace.filename.clone(),
+        timestamp: trace.timestamp.clone(),
+        model: trace.model.clone(),
+        key_name: trace.key_name.clone(),
+        request_id: trace.request_id.clone(),
+    };
+    let path = trace.directory.join(&trace.filename);
     let mut record = json!({
         "timestamp": trace.timestamp,
         "request_id": trace.request_id,
@@ -931,9 +1051,13 @@ fn write_conversation_record(
     if let Some(raw) = output_raw {
         record["output_raw"] = json!(raw);
     }
-    std::fs::write(
-        trace.directory.join(trace.filename),
-        serde_json::to_vec_pretty(&record)?,
+    std::fs::write(&path, serde_json::to_vec_pretty(&record)?)?;
+    let metadata = std::fs::metadata(&path)?;
+    database.upsert_conversation_index(
+        &trace.directory,
+        &index_entry,
+        metadata.len(),
+        file_modified_at(&metadata),
     )?;
     Ok(())
 }
@@ -983,7 +1107,13 @@ impl ConnectionBodyStream {
         tokio::spawn(async move {
             state.remove_connection(&request_id).await;
             if let Some(trace) = conversation {
-                let _ = save_conversation_record_async(trace, None, Some(output)).await;
+                let _ = save_conversation_record_async(
+                    state.database.clone(),
+                    trace,
+                    None,
+                    Some(output),
+                )
+                .await;
             }
         });
     }
@@ -1437,7 +1567,13 @@ async fn proxy_handler(
         } else {
             None
         };
-        let _ = save_conversation_record_async(trace, response_json, output_raw).await;
+        let _ = save_conversation_record_async(
+            state.database.clone(),
+            trace,
+            response_json,
+            output_raw,
+        )
+        .await;
     }
     state.remove_connection(&request_id).await;
     Ok(out.body(Body::from(bytes)).unwrap())

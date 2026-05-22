@@ -66,6 +66,20 @@ fn frontend_adds_usage_user_agents_to_provider_header_candidates() {
 }
 
 #[test]
+fn conversations_use_indexed_server_side_pagination() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let index = std::fs::read_to_string(root.join("public").join("index.html")).unwrap();
+    let server = std::fs::read_to_string(root.join("src").join("server.rs")).unwrap();
+    let database = std::fs::read_to_string(root.join("src").join("database.rs")).unwrap();
+
+    assert!(index.contains("/api/conversations?page="));
+    assert!(!index.contains("api('/api/conversations');"));
+    assert!(server.contains("sync_conversation_index"));
+    assert!(database.contains("CREATE TABLE IF NOT EXISTS conversation_index"));
+    assert!(database.contains("conversation_page"));
+}
+
+#[test]
 fn rust_proxy_hot_path_uses_streaming_cache_async_db_and_tokenizer() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let server = std::fs::read_to_string(root.join("src").join("server.rs")).unwrap();

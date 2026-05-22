@@ -584,6 +584,61 @@ async fn proxy_request_is_saved_and_listed_when_conversation_storage_enabled() {
 }
 
 #[tokio::test]
+async fn conversations_api_paginates_without_returning_all_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let conversation_dir = tempfile::tempdir().unwrap();
+    let mut cfg = AppConfig::default();
+    cfg.conversation_storage.enabled = true;
+    cfg.conversation_storage.directory = conversation_dir.path().to_string_lossy().to_string();
+    save_config(dir.path(), &cfg).unwrap();
+
+    for index in 0..25 {
+        let request_id = format!("req-page-{index:02}");
+        let timestamp = format!("2026-05-22T22:{index:02}:00Z");
+        let filename = format!("20260522T2200{index:02}000Z-{request_id}.json");
+        std::fs::write(
+            conversation_dir.path().join(filename),
+            json!({
+                "timestamp": timestamp,
+                "request_id": request_id,
+                "model": "deepseek-v4-pro",
+                "key_name": "read",
+                "input": {"messages": []},
+                "output": {"choices": []}
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/conversations?page=2&pageSize=10")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(value["enabled"], true);
+    assert_eq!(value["entries"].as_array().unwrap().len(), 10);
+    assert_eq!(value["pagination"]["page"], 2);
+    assert_eq!(value["pagination"]["pageSize"], 10);
+    assert_eq!(value["pagination"]["total"], 25);
+    assert_eq!(value["pagination"]["totalPages"], 3);
+}
+
+#[tokio::test]
 async fn connections_api_lists_inflight_proxy_request() {
     let dir = tempfile::tempdir().unwrap();
     let (upstream_url, shutdown_upstream, upstream_server) = spawn_openai_slow_upstream().await;

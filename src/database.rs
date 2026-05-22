@@ -80,6 +80,21 @@ pub struct UsagePage {
     pub pagination: Pagination,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ConversationEntry {
+    pub filename: String,
+    pub timestamp: String,
+    pub model: String,
+    pub key_name: String,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ConversationPage {
+    pub entries: Vec<ConversationEntry>,
+    pub pagination: Pagination,
+}
+
 impl Database {
     pub fn open(root: &Path) -> Result<Self, DatabaseError> {
         std::fs::create_dir_all(root)?;
@@ -177,6 +192,144 @@ impl Database {
         tokio::task::spawn_blocking(move || db.usage_page(page, page_size))
             .await
             .map_err(|err| DatabaseError::BlockingTask(err.to_string()))?
+    }
+
+    pub fn conversation_index_files(
+        &self,
+        directory: &Path,
+    ) -> Result<BTreeMap<String, (u64, i64)>, DatabaseError> {
+        let directory = directory_key(directory);
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT filename, file_size, modified_at
+             FROM conversation_index
+             WHERE directory = ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![directory], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    (row.get::<_, i64>(1)?.max(0) as u64, row.get::<_, i64>(2)?),
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows.into_iter().collect())
+    }
+
+    pub fn conversation_usage_metadata(
+        &self,
+        request_id: &str,
+        filename: &str,
+    ) -> Result<Option<ConversationEntry>, DatabaseError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT timestamp, model, key_name
+             FROM usage_logs
+             WHERE request_id = ?1
+             ORDER BY id DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![request_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(ConversationEntry {
+            filename: filename.to_string(),
+            timestamp: row.get(0)?,
+            model: row.get(1)?,
+            key_name: row.get(2)?,
+            request_id: request_id.to_string(),
+        }))
+    }
+
+    pub fn upsert_conversation_index(
+        &self,
+        directory: &Path,
+        entry: &ConversationEntry,
+        file_size: u64,
+        modified_at: i64,
+    ) -> Result<(), DatabaseError> {
+        let directory = directory_key(directory);
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO conversation_index (
+                directory, filename, timestamp, model, key_name, request_id,
+                file_size, modified_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(directory, filename) DO UPDATE SET
+                timestamp = excluded.timestamp,
+                model = excluded.model,
+                key_name = excluded.key_name,
+                request_id = excluded.request_id,
+                file_size = excluded.file_size,
+                modified_at = excluded.modified_at",
+            params![
+                directory,
+                entry.filename,
+                entry.timestamp,
+                entry.model,
+                entry.key_name,
+                entry.request_id,
+                file_size as i64,
+                modified_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_conversation_index(
+        &self,
+        directory: &Path,
+        filename: &str,
+    ) -> Result<(), DatabaseError> {
+        let directory = directory_key(directory);
+        self.lock_conn()?.execute(
+            "DELETE FROM conversation_index WHERE directory = ?1 AND filename = ?2",
+            params![directory, filename],
+        )?;
+        Ok(())
+    }
+
+    pub fn conversation_page(
+        &self,
+        directory: &Path,
+        page: u64,
+        page_size: u64,
+    ) -> Result<ConversationPage, DatabaseError> {
+        let requested_page = page.max(1);
+        let page_size = page_size.clamp(1, 100);
+        let directory = directory_key(directory);
+        let conn = self.lock_conn()?;
+        let total: u64 = conn.query_row(
+            "SELECT COUNT(*) FROM conversation_index WHERE directory = ?1",
+            params![directory],
+            |row| row.get::<_, i64>(0),
+        )? as u64;
+        let total_pages = ((total + page_size - 1) / page_size).max(1);
+        let page = requested_page.min(total_pages);
+        let offset = (page - 1) * page_size;
+        let mut stmt = conn.prepare(
+            "SELECT filename, timestamp, model, key_name, request_id
+             FROM conversation_index
+             WHERE directory = ?1
+             ORDER BY timestamp DESC, filename DESC
+             LIMIT ?2 OFFSET ?3",
+        )?;
+        let entries = stmt
+            .query_map(
+                params![directory, page_size as i64, offset as i64],
+                row_to_conversation_entry,
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ConversationPage {
+            entries,
+            pagination: Pagination {
+                page,
+                page_size,
+                total,
+                total_pages,
+            },
+        })
     }
 
     pub fn user_agent_candidates(&self, limit: u64) -> Result<Vec<String>, DatabaseError> {
@@ -368,7 +521,23 @@ impl Database {
                 model TEXT NOT NULL DEFAULT '',
                 request_json TEXT NOT NULL DEFAULT '',
                 response_json TEXT NOT NULL DEFAULT ''
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS conversation_index (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                directory TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                timestamp TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                key_name TEXT NOT NULL DEFAULT 'master',
+                request_id TEXT NOT NULL DEFAULT '',
+                file_size INTEGER NOT NULL DEFAULT 0,
+                modified_at INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(directory, filename)
+             );
+             CREATE INDEX IF NOT EXISTS idx_conversation_index_directory_timestamp
+                ON conversation_index(directory, timestamp DESC, filename DESC);
+             CREATE INDEX IF NOT EXISTS idx_conversation_index_request_id
+                ON conversation_index(request_id);",
         )?;
         Ok(())
     }
@@ -465,6 +634,20 @@ fn row_to_usage_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageLog> {
         error: row.get(13)?,
         path: row.get(14)?,
     })
+}
+
+fn row_to_conversation_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConversationEntry> {
+    Ok(ConversationEntry {
+        filename: row.get(0)?,
+        timestamp: row.get(1)?,
+        model: row.get(2)?,
+        key_name: row.get(3)?,
+        request_id: row.get(4)?,
+    })
+}
+
+fn directory_key(directory: &Path) -> String {
+    directory.to_string_lossy().to_string()
 }
 
 fn legacy_usage_log(value: &Value) -> UsageLog {

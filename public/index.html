@@ -1186,7 +1186,7 @@ function exportUsageCsv() {
 async function loadConversations(page, pageSize) {
   if (page !== undefined) convPage = page;
   if (pageSize !== undefined) convPageSize = pageSize;
-  const res = await api('/api/conversations');
+  const res = await api(`/api/conversations?page=${convPage}&pageSize=${convPageSize}`);
   const data = await res.json();
   const statusEl = document.getElementById('convStorageStatus');
   const listEl = document.getElementById('convListContainer');
@@ -1199,24 +1199,26 @@ async function loadConversations(page, pageSize) {
   }
   statusEl.textContent = '已启用 | 目录: ' + data.directory;
   statusEl.style.color = 'var(--success)';
-  const allEntries = data.entries || [];
-  if (allEntries.length === 0) {
+  const entries = data.entries || [];
+  const pg = data.pagination || {
+    page: convPage,
+    pageSize: convPageSize,
+    total: entries.length,
+    totalPages: Math.max(1, Math.ceil(entries.length / convPageSize))
+  };
+  convPage = pg.page || convPage;
+  convPageSize = pg.pageSize || convPageSize;
+  if (entries.length === 0) {
     listEl.innerHTML = '<p style="color:var(--muted)">暂无保存的对话记录。</p>';
     document.getElementById('convPagination').innerHTML = '';
     return;
   }
-  const total = allEntries.length;
-  const totalPages = Math.max(1, Math.ceil(total / convPageSize));
-  convPage = Math.min(convPage, totalPages);
-  const offset = (convPage - 1) * convPageSize;
-  const pagedEntries = allEntries.slice(offset, offset + convPageSize);
   let html = '<table><thead><tr><th>时间</th><th>模型</th><th>密钥</th><th>请求ID</th><th>操作</th></tr></thead><tbody>';
-  for (const e of pagedEntries) {
+  for (const e of entries) {
     html += `<tr><td>${new Date(e.timestamp).toLocaleString()}</td><td>${escapeHtml(e.model || '-')}</td><td>${escapeHtml(e.key_name || 'master')}</td><td><span style="font-size:.7rem;color:var(--muted)">${escapeHtml(e.request_id || '-')}</span></td><td><button class="btn btn-sm btn-secondary" data-filename="${escapeAttr(e.filename)}" onclick="openConvDetail(this.dataset.filename)">查看</button> <button class="btn btn-sm btn-danger" data-filename="${escapeAttr(e.filename)}" onclick="deleteConversation(this.dataset.filename)">删除</button></td></tr>`;
   }
   html += '</tbody></table>';
   listEl.innerHTML = html;
-  const pg = { page: convPage, pageSize: convPageSize, total, totalPages };
   renderPagination('convPagination', pg, (p) => loadConversations(p), (ps) => loadConversations(1, ps));
 }
 function escapeHtml(text) {
