@@ -440,6 +440,163 @@ async fn conversation_storage_save_returns_saved_setting() {
 }
 
 #[tokio::test]
+async fn proxy_request_is_saved_and_listed_when_conversation_storage_enabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let conversation_dir = tempfile::tempdir().unwrap();
+    let (upstream_url, shutdown, server) = spawn_openai_json_upstream().await;
+    let mut cfg = AppConfig::default();
+    cfg.conversation_storage.enabled = true;
+    cfg.conversation_storage.directory = conversation_dir.path().to_string_lossy().to_string();
+    cfg.providers.push(ProviderConfig {
+        id: "p1".to_string(),
+        name: "OpenAI".to_string(),
+        provider_type: "openai".to_string(),
+        base_url: Some(format!("{upstream_url}/v1")),
+        api_key: "provider-key".to_string(),
+        user_agent: None,
+        models: vec![ModelConfig {
+            model_name: "local-gpt".to_string(),
+            model_id: "gpt-4o-mini".to_string(),
+        }],
+    });
+    save_config(dir.path(), &cfg).unwrap();
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("authorization", "Bearer openrelay-master")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "local-gpt",
+                        "messages": [{"role": "user", "content": "hello"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/conversations")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list["enabled"], true);
+    assert_eq!(list["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(list["entries"][0]["model"], "local-gpt");
+    let filename = list["entries"][0]["filename"].as_str().unwrap();
+
+    let detail_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/conversations/{filename}"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(detail_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(detail["input"]["model"], "local-gpt");
+    assert_eq!(detail["output"]["choices"][0]["message"]["content"], "ok");
+
+    let _ = shutdown.send(());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn connections_api_lists_inflight_proxy_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let (upstream_url, shutdown_upstream, upstream_server) = spawn_openai_slow_upstream().await;
+    let mut cfg = AppConfig::default();
+    cfg.providers.push(ProviderConfig {
+        id: "p1".to_string(),
+        name: "OpenAI".to_string(),
+        provider_type: "openai".to_string(),
+        base_url: Some(format!("{upstream_url}/v1")),
+        api_key: "provider-key".to_string(),
+        user_agent: None,
+        models: vec![ModelConfig {
+            model_name: "local-gpt".to_string(),
+            model_id: "gpt-4o-mini".to_string(),
+        }],
+    });
+    save_config(dir.path(), &cfg).unwrap();
+    let (gateway_url, shutdown_gateway, gateway_server) = spawn_openrelay_server(dir.path()).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let login = client
+        .post(format!("{gateway_url}/api/login"))
+        .json(&json!({"username": "admin", "password": "admin123"}))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    let token = login["token"].as_str().unwrap().to_string();
+
+    let proxy_client = client.clone();
+    let proxy_url = format!("{gateway_url}/v1/chat/completions");
+    let proxy_task = tokio::spawn(async move {
+        proxy_client
+            .post(proxy_url)
+            .bearer_auth("openrelay-master")
+            .json(&json!({
+                "model": "local-gpt",
+                "messages": [{"role": "user", "content": "hello"}]
+            }))
+            .send()
+            .await
+            .unwrap()
+    });
+    sleep(Duration::from_millis(120)).await;
+
+    let connections = client
+        .get(format!("{gateway_url}/api/connections"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(connections["count"], 1);
+    assert_eq!(connections["entries"][0]["model"], "local-gpt");
+    assert_eq!(connections["entries"][0]["keyName"], "master");
+    assert!(connections["entries"][0]["elapsedMs"].as_u64().unwrap() > 0);
+
+    let response = proxy_task.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = shutdown_gateway.send(());
+    gateway_server.await.unwrap();
+    let _ = shutdown_upstream.send(());
+    upstream_server.await.unwrap();
+}
+
+#[tokio::test]
 async fn openai_stream_proxy_forwards_first_chunk_before_upstream_finishes() {
     let dir = tempfile::tempdir().unwrap();
     let (upstream_url, shutdown_upstream, upstream_server) =
@@ -528,6 +685,54 @@ async fn spawn_openrelay_server(
             .unwrap();
     });
     (format!("http://{addr}"), shutdown_tx, server)
+}
+
+async fn spawn_openai_json_upstream() -> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>)
+{
+    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let app = Router::new().route("/*path", any(openai_json_response));
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .unwrap();
+    });
+    (format!("http://{addr}"), shutdown_tx, server)
+}
+
+async fn openai_json_response() -> Json<serde_json::Value> {
+    Json(json!({
+        "choices": [{"message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2}
+    }))
+}
+
+async fn spawn_openai_slow_upstream() -> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>)
+{
+    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let app = Router::new().route("/*path", any(openai_slow_response));
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .unwrap();
+    });
+    (format!("http://{addr}"), shutdown_tx, server)
+}
+
+async fn openai_slow_response() -> Json<serde_json::Value> {
+    sleep(Duration::from_millis(700)).await;
+    openai_json_response().await
 }
 
 async fn spawn_openai_streaming_upstream(

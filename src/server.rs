@@ -10,7 +10,7 @@ use crate::proxy::{
     get_request_model, is_gemini_models_endpoint, is_models_endpoint, resolve_provider,
     rewrite_json_model, KeyCheck,
 };
-use axum::body::{to_bytes, Body};
+use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, Request, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -18,12 +18,16 @@ use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 use bcrypt::verify;
 use chrono::{Duration, Utc};
+use futures_util::Stream;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::task::{Context, Poll};
 use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -71,8 +75,31 @@ pub struct ServerState {
     pub static_root: Arc<PathBuf>,
     pub database: Database,
     config: Arc<RwLock<AppConfig>>,
+    connections: Arc<RwLock<BTreeMap<String, ActiveConnection>>>,
     client: reqwest::Client,
     jwt_secret: Arc<String>,
+}
+
+#[derive(Clone)]
+struct ActiveConnection {
+    request_id: String,
+    model: String,
+    key_name: String,
+    user_agent: String,
+    stream: bool,
+    started: Instant,
+}
+
+#[derive(Clone)]
+struct ConversationTrace {
+    directory: PathBuf,
+    filename: String,
+    timestamp: String,
+    request_id: String,
+    model: String,
+    key_name: String,
+    user_agent: String,
+    input: Value,
 }
 
 impl ServerState {
@@ -89,6 +116,7 @@ impl ServerState {
             static_root: Arc::new(static_root),
             database,
             config: Arc::new(RwLock::new(config)),
+            connections: Arc::new(RwLock::new(BTreeMap::new())),
             client: reqwest::Client::new(),
             jwt_secret: Arc::new(
                 std::env::var("JWT_SECRET")
@@ -103,6 +131,35 @@ impl ServerState {
 
     pub async fn replace_config(&self, config: AppConfig) {
         *self.config.write().await = config;
+    }
+
+    async fn insert_connection(&self, connection: ActiveConnection) {
+        self.connections
+            .write()
+            .await
+            .insert(connection.request_id.clone(), connection);
+    }
+
+    async fn remove_connection(&self, request_id: &str) -> bool {
+        self.connections.write().await.remove(request_id).is_some()
+    }
+
+    async fn connection_entries(&self) -> Vec<Value> {
+        self.connections
+            .read()
+            .await
+            .values()
+            .map(|connection| {
+                json!({
+                    "requestId": connection.request_id,
+                    "model": connection.model,
+                    "keyName": connection.key_name,
+                    "userAgent": connection.user_agent,
+                    "stream": connection.stream,
+                    "elapsedMs": connection.started.elapsed().as_millis() as u64
+                })
+            })
+            .collect()
     }
 }
 
@@ -640,14 +697,64 @@ async fn merge_usage(
         json!({ "success": true, "changed": false, "database": true }),
     ))
 }
-async fn get_conversations() -> Json<Value> {
-    Json(json!({ "enabled": false, "entries": [] }))
+async fn get_conversations(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let storage = state.current_config().await.conversation_storage;
+    if !storage.enabled || storage.directory.trim().is_empty() {
+        return Ok(Json(json!({ "enabled": false, "entries": [] })).into_response());
+    }
+    let directory = PathBuf::from(storage.directory.trim());
+    let entries = tokio::task::spawn_blocking({
+        let directory = directory.clone();
+        move || list_conversation_entries(&directory)
+    })
+    .await
+    .map_err(|err| DatabaseError::BlockingTask(err.to_string()))??;
+    Ok(Json(json!({
+        "enabled": true,
+        "directory": directory.to_string_lossy(),
+        "entries": entries
+    }))
+    .into_response())
 }
-async fn get_conversation() -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({ "error": "Not found" }))).into_response()
+async fn get_conversation(
+    AxumPath(filename): AxumPath<String>,
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let Some(path) = conversation_file_path(&state.current_config().await, &filename) else {
+        return Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "Not found" }))).into_response());
+    };
+    let value = tokio::task::spawn_blocking(move || read_conversation_file(&path))
+        .await
+        .map_err(|err| DatabaseError::BlockingTask(err.to_string()))??;
+    Ok(Json(value).into_response())
 }
-async fn delete_conversation() -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({ "error": "Not found" }))).into_response()
+async fn delete_conversation(
+    AxumPath(filename): AxumPath<String>,
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let Some(path) = conversation_file_path(&state.current_config().await, &filename) else {
+        return Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "Not found" }))).into_response());
+    };
+    let removed = tokio::task::spawn_blocking(move || match std::fs::remove_file(&path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(ServerError::Io(err)),
+    })
+    .await
+    .map_err(|err| DatabaseError::BlockingTask(err.to_string()))??;
+    if removed {
+        Ok(Json(json!({ "success": true })).into_response())
+    } else {
+        Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "Not found" }))).into_response())
+    }
 }
 async fn post_conversation_storage(
     State(state): State<ServerState>,
@@ -675,13 +782,228 @@ async fn post_conversation_storage(
 async fn open_conversation_storage() -> Json<Value> {
     Json(json!({ "success": false, "error": "Not implemented in Rust prototype" }))
 }
-async fn get_connections() -> Json<Value> {
-    Json(json!({ "entries": [] }))
+async fn get_connections(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ServerError> {
+    require_admin(&state, &headers)?;
+    let entries = state.connection_entries().await;
+    Ok(Json(json!({ "count": entries.len(), "entries": entries })))
 }
-async fn abort_connection() -> Json<Value> {
-    Json(
-        json!({ "success": false, "error": "Connection tracking is not implemented in Rust prototype" }),
-    )
+async fn abort_connection(
+    AxumPath(request_id): AxumPath<String>,
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    if state.remove_connection(&request_id).await {
+        Ok(Json(json!({ "success": true })).into_response())
+    } else {
+        Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "success": false, "error": "Not found" })),
+        )
+            .into_response())
+    }
+}
+
+fn list_conversation_entries(directory: &Path) -> Result<Vec<Value>, ServerError> {
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(value) = read_conversation_file(&path) else {
+            continue;
+        };
+        let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        entries.push(json!({
+            "filename": filename,
+            "timestamp": value.get("timestamp").cloned().unwrap_or(json!("")),
+            "model": value.get("model").cloned().unwrap_or(json!("")),
+            "key_name": value.get("key_name").cloned().unwrap_or(json!("master")),
+            "request_id": value.get("request_id").cloned().unwrap_or(json!(""))
+        }));
+    }
+    entries.sort_by(|left, right| {
+        right
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .cmp(&left.get("timestamp").and_then(Value::as_str))
+    });
+    Ok(entries)
+}
+
+fn read_conversation_file(path: &Path) -> Result<Value, ServerError> {
+    Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
+}
+
+fn conversation_file_path(cfg: &AppConfig, filename: &str) -> Option<PathBuf> {
+    if !cfg.conversation_storage.enabled || cfg.conversation_storage.directory.trim().is_empty() {
+        return None;
+    }
+    if !safe_conversation_filename(filename) {
+        return None;
+    }
+    Some(PathBuf::from(cfg.conversation_storage.directory.trim()).join(filename))
+}
+
+fn safe_conversation_filename(filename: &str) -> bool {
+    !filename.trim().is_empty()
+        && !filename.contains('/')
+        && !filename.contains('\\')
+        && filename.ends_with(".json")
+}
+
+fn conversation_trace(
+    cfg: &AppConfig,
+    timestamp: &str,
+    request_id: &str,
+    model: &str,
+    key_name: &str,
+    user_agent: &str,
+    input: &Value,
+) -> Option<ConversationTrace> {
+    if !cfg.conversation_storage.enabled || cfg.conversation_storage.directory.trim().is_empty() {
+        return None;
+    }
+    Some(ConversationTrace {
+        directory: PathBuf::from(cfg.conversation_storage.directory.trim()),
+        filename: format!(
+            "{}-{}.json",
+            Utc::now()
+                .format("%Y%m%dT%H%M%S%.3fZ")
+                .to_string()
+                .replace('.', ""),
+            request_id
+        ),
+        timestamp: timestamp.to_string(),
+        request_id: request_id.to_string(),
+        model: model.to_string(),
+        key_name: key_name.to_string(),
+        user_agent: user_agent.to_string(),
+        input: input.clone(),
+    })
+}
+
+async fn save_conversation_record_async(
+    trace: ConversationTrace,
+    output: Option<Value>,
+    output_raw: Option<String>,
+) -> Result<(), ServerError> {
+    tokio::task::spawn_blocking(move || write_conversation_record(trace, output, output_raw))
+        .await
+        .map_err(|err| DatabaseError::BlockingTask(err.to_string()))??;
+    Ok(())
+}
+
+fn write_conversation_record(
+    trace: ConversationTrace,
+    output: Option<Value>,
+    output_raw: Option<String>,
+) -> Result<(), ServerError> {
+    std::fs::create_dir_all(&trace.directory)?;
+    let mut record = json!({
+        "timestamp": trace.timestamp,
+        "request_id": trace.request_id,
+        "model": trace.model,
+        "key_name": trace.key_name,
+        "user_agent": trace.user_agent,
+        "input": trace.input,
+        "output": output.unwrap_or(Value::Null)
+    });
+    if let Some(raw) = output_raw {
+        record["output_raw"] = json!(raw);
+    }
+    std::fs::write(
+        trace.directory.join(trace.filename),
+        serde_json::to_vec_pretty(&record)?,
+    )?;
+    Ok(())
+}
+
+struct ConnectionBodyStream {
+    inner: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>,
+    state: ServerState,
+    request_id: String,
+    conversation: Option<ConversationTrace>,
+    output: Arc<StdMutex<Vec<u8>>>,
+    finished: bool,
+}
+
+impl ConnectionBodyStream {
+    fn new<S>(
+        stream: S,
+        state: ServerState,
+        request_id: String,
+        conversation: Option<ConversationTrace>,
+    ) -> Self
+    where
+        S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
+    {
+        Self {
+            inner: Box::pin(stream),
+            state,
+            request_id,
+            conversation,
+            output: Arc::new(StdMutex::new(Vec::new())),
+            finished: false,
+        }
+    }
+
+    fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        let state = self.state.clone();
+        let request_id = self.request_id.clone();
+        let conversation = self.conversation.take();
+        let output = self
+            .output
+            .lock()
+            .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+            .unwrap_or_default();
+        tokio::spawn(async move {
+            state.remove_connection(&request_id).await;
+            if let Some(trace) = conversation {
+                let _ = save_conversation_record_async(trace, None, Some(output)).await;
+            }
+        });
+    }
+}
+
+impl Stream for ConnectionBodyStream {
+    type Item = Result<Bytes, reqwest::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(bytes))) => {
+                if let Ok(mut output) = self.output.lock() {
+                    output.extend_from_slice(&bytes);
+                }
+                Poll::Ready(Some(Ok(bytes)))
+            }
+            Poll::Ready(None) => {
+                self.finish();
+                Poll::Ready(None)
+            }
+            other => other,
+        }
+    }
+}
+
+impl Drop for ConnectionBodyStream {
+    fn drop(&mut self) {
+        self.finish();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -889,6 +1211,7 @@ async fn proxy_handler(
         return Ok(limit_error(message));
     }
     let request_id = Uuid::new_v4().to_string();
+    let request_timestamp = Utc::now().to_rfc3339();
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -954,7 +1277,32 @@ async fn proxy_handler(
             req = req.header(passthrough, value.clone());
         }
     }
-    let response = req.body(upstream_body).send().await?;
+    state
+        .insert_connection(ActiveConnection {
+            request_id: request_id.clone(),
+            model: model.clone(),
+            key_name: key_name.clone(),
+            user_agent: user_agent.clone(),
+            stream,
+            started,
+        })
+        .await;
+    let conversation = conversation_trace(
+        &cfg,
+        &request_timestamp,
+        &request_id,
+        &model,
+        &key_name,
+        &user_agent,
+        &json_body,
+    );
+    let response = match req.body(upstream_body).send().await {
+        Ok(response) => response,
+        Err(err) => {
+            state.remove_connection(&request_id).await;
+            return Err(err.into());
+        }
+    };
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let response_content_type = response
@@ -975,6 +1323,8 @@ async fn proxy_handler(
         let usage_body = json_body.clone();
         let usage_model = model.clone();
         let usage_path = target_path.to_string();
+        let usage_request_id = request_id.clone();
+        let usage_timestamp = request_timestamp.clone();
         let duration_ms = started.elapsed().as_millis() as u64;
         let error = if status.is_success() {
             String::new()
@@ -986,8 +1336,8 @@ async fn proxy_handler(
             let cost = calc_cost(&usage_model, estimated_input, 0, 0, 0, &pricing);
             let _ = database
                 .record_usage_async(UsageLog {
-                    timestamp: Utc::now().to_rfc3339(),
-                    request_id,
+                    timestamp: usage_timestamp,
+                    request_id: usage_request_id,
                     model: usage_model,
                     key_name,
                     input_tokens: estimated_input,
@@ -1004,17 +1354,28 @@ async fn proxy_handler(
                 })
                 .await;
         });
-        return Ok(out
-            .body(Body::from_stream(response.bytes_stream()))
-            .unwrap());
+        let stream = ConnectionBodyStream::new(
+            response.bytes_stream(),
+            state.clone(),
+            request_id.clone(),
+            conversation,
+        );
+        return Ok(out.body(Body::from_stream(stream)).unwrap());
     }
 
-    let bytes = response.bytes().await?;
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            state.remove_connection(&request_id).await;
+            return Err(err.into());
+        }
+    };
     let estimated_input = estimate_tokens(&json_body);
     let mut usage = crate::proxy::UsageTokens {
         input_tokens: estimated_input,
         ..Default::default()
     };
+    let mut response_json = None;
     if response_content_type
         .to_str()
         .unwrap_or("")
@@ -1022,6 +1383,7 @@ async fn proxy_handler(
     {
         if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
             usage = extract_usage_tokens(&value, estimated_input);
+            response_json = Some(value);
         }
     }
     let cost = calc_cost(
@@ -1044,9 +1406,9 @@ async fn proxy_handler(
         .database
         .record_usage_async(UsageLog {
             timestamp: Utc::now().to_rfc3339(),
-            request_id,
+            request_id: request_id.clone(),
             model: model.clone(),
-            key_name,
+            key_name: key_name.clone(),
             input_tokens: usage.input_tokens,
             cached_tokens: usage.cached_tokens,
             cached_write_tokens: usage.cached_write_tokens,
@@ -1060,6 +1422,15 @@ async fn proxy_handler(
             path: target_path.to_string(),
         })
         .await;
+    if let Some(trace) = conversation {
+        let output_raw = if response_json.is_none() {
+            Some(String::from_utf8_lossy(&bytes).to_string())
+        } else {
+            None
+        };
+        let _ = save_conversation_record_async(trace, response_json, output_raw).await;
+    }
+    state.remove_connection(&request_id).await;
     Ok(out.body(Body::from(bytes)).unwrap())
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "openrelay"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "A personal unified LLM API gateway"
 
@@ -16,6 +16,7 @@ path = "src/main.rs"
 axum = { version = "0.7", features = ["macros", "multipart"] }
 bcrypt = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
 jsonwebtoken = "9"
 mime_guess = "2"
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
@@ -42,7 +43,6 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
-futures-util = "0.3"
 tempfile = "3"
 tokio-stream = "0.1"
 tower = { version = "0.5", features = ["util"] }
