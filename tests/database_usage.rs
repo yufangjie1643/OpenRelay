@@ -87,3 +87,29 @@ async fn sqlite_usage_database_exposes_async_wrappers_for_request_path() {
     assert_eq!(cost, 0.42);
     assert_eq!(page.stats.total_requests, 1);
 }
+
+#[test]
+fn sqlite_usage_database_lists_distinct_user_agent_candidates() {
+    let db = Database::memory().unwrap();
+    let mut first = log_entry("gpt-a", "master", 10, 0, 5);
+    first.user_agent = "claude-cli/2.0.0 (external, cli)".to_string();
+    db.record_usage(&first).unwrap();
+
+    let mut duplicate = log_entry("gpt-a", "master", 10, 0, 5);
+    duplicate.user_agent = "claude-cli/2.0.0 (external, cli)".to_string();
+    db.record_usage(&duplicate).unwrap();
+
+    let mut second = log_entry("gpt-a", "master", 10, 0, 5);
+    second.user_agent = "cursor-agent/1.0.0".to_string();
+    db.record_usage(&second).unwrap();
+
+    let candidates = db.user_agent_candidates(10).unwrap();
+
+    assert_eq!(
+        candidates,
+        vec![
+            "cursor-agent/1.0.0".to_string(),
+            "claude-cli/2.0.0 (external, cli)".to_string()
+        ]
+    );
+}

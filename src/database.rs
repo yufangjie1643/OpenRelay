@@ -179,6 +179,33 @@ impl Database {
             .map_err(|err| DatabaseError::BlockingTask(err.to_string()))?
     }
 
+    pub fn user_agent_candidates(&self, limit: u64) -> Result<Vec<String>, DatabaseError> {
+        let limit = limit.clamp(1, 100);
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT user_agent
+             FROM usage_logs
+             WHERE TRIM(user_agent) <> ''
+             GROUP BY user_agent
+             ORDER BY MAX(id) DESC
+             LIMIT ?1",
+        )?;
+        let candidates = stmt
+            .query_map(params![limit as i64], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(candidates)
+    }
+
+    pub async fn user_agent_candidates_async(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<String>, DatabaseError> {
+        let db = self.clone();
+        tokio::task::spawn_blocking(move || db.user_agent_candidates(limit))
+            .await
+            .map_err(|err| DatabaseError::BlockingTask(err.to_string()))?
+    }
+
     pub fn clear_usage(&self) -> Result<(), DatabaseError> {
         self.lock_conn()?.execute("DELETE FROM usage_logs", [])?;
         Ok(())

@@ -52,6 +52,20 @@ fn frontend_shows_protocol_specific_proxy_endpoints_and_stable_model_picker() {
 }
 
 #[test]
+fn frontend_adds_usage_user_agents_to_provider_header_candidates() {
+    let index = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("public")
+            .join("index.html"),
+    )
+    .unwrap();
+
+    assert!(index.contains("header_candidates"));
+    assert!(index.contains("refreshUAOptions"));
+    assert!(index.contains("历史请求头"));
+}
+
+#[test]
 fn rust_proxy_hot_path_uses_streaming_cache_async_db_and_tokenizer() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let server = std::fs::read_to_string(root.join("src").join("server.rs")).unwrap();

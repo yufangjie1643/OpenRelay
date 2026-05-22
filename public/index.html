@@ -514,6 +514,17 @@ let config = { providers: [], pricing: {}, limits: {}, virtual_keys: [], router_
 let editingProviderIndex = -1, editingModelIndex = -1, editingVkIndex = -1;
 let detectedModels = [];
 let providerTested = false, providerTestedModels = [], providerOriginalKey = '', providerOriginalBase = '';  // for provider modal
+let headerCandidates = { user_agents: [] };
+const STATIC_UA_OPTIONS = [
+  ['OpenRelay-Gateway/1.0', 'OpenRelay-Gateway/1.0'],
+  ['opencode/1.0.0', 'opencode/1.0.0 (OpenCode CLI)'],
+  ['claude-cli/2.0.0 (external, cli)', 'claude-cli/2.0.0 (Claude Code)'],
+  ['codex_cli_rs/0.1.0', 'codex_cli_rs/0.1.0 (OpenAI Codex CLI)'],
+  ['copilot-cli/1.0.0', 'copilot-cli/1.0.0 (GitHub Copilot CLI)'],
+  ['cursor-agent/1.0.0', 'cursor-agent/1.0.0 (Cursor Agent)'],
+  ['gemini-cli/1.0.0', 'gemini-cli/1.0.0 (Gemini CLI)'],
+  ['litellm/Python', 'litellm/Python (LiteLLM)']
+];
 const THEME_STORAGE_KEY = 'openrelay_theme_mode';
 const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 let themeControlsBound = false;
@@ -573,6 +584,8 @@ async function api(path, opts = {}) {
 async function load() {
   const res = await api('/api/config');
   config = await res.json();
+  headerCandidates = config.header_candidates || { user_agents: [] };
+  refreshUAOptions();
   renderProviders();
   renderPricing();
   renderLimits();
@@ -660,6 +673,7 @@ function flattenForYAML(cfg) {
   delete out.pricing;
   delete out.limits;
   delete out.virtual_keys;
+  delete out.header_candidates;
   out.model_list = [];
   for (const prov of cfg.providers || []) {
     for (const m of prov.models || []) {
@@ -677,12 +691,34 @@ function getUAValue() {
   if (sel === 'custom') return document.getElementById('pUACustom').value.trim();
   return sel;
 }
-function setUAValue(val) {
+function refreshUAOptions(preferredValue) {
+  const select = document.getElementById('pUASelect');
+  if (!select) return;
+  const current = preferredValue ?? select.value ?? 'OpenRelay-Gateway/1.0';
+  const seen = new Set();
+  select.innerHTML = '';
+  const addOption = (value, label) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
+  };
+  STATIC_UA_OPTIONS.forEach(([value, label]) => addOption(value, label));
+  (headerCandidates.user_agents || []).forEach(ua => addOption(ua, `${ua} (历史请求头)`));
+  addOption('custom', '自定义...');
+  applyUAValue(current);
+}
+function applyUAValue(val) {
   const select = document.getElementById('pUASelect');
   const custom = document.getElementById('pUACustom');
   const known = Array.from(select.options).map(o => o.value);
   if (known.includes(val)) { select.value = val; custom.style.display = 'none'; }
   else { select.value = 'custom'; custom.style.display = 'block'; custom.value = val; }
+}
+function setUAValue(val) {
+  refreshUAOptions(val);
 }
 function onUAChange() {
   const sel = document.getElementById('pUASelect').value;

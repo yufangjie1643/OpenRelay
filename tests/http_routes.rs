@@ -177,6 +177,62 @@ async fn config_api_accepts_safe_config_body_from_frontend_save() {
 }
 
 #[tokio::test]
+async fn config_api_includes_user_agent_candidates_from_usage_database() {
+    let dir = tempfile::tempdir().unwrap();
+    openrelay::config::ensure_files(dir.path()).unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    let mut usage = UsageLog {
+        timestamp: "2026-05-22T12:00:00Z".to_string(),
+        request_id: "req-ua".to_string(),
+        model: "local-gpt".to_string(),
+        key_name: "master".to_string(),
+        input_tokens: 1,
+        cached_tokens: 0,
+        cached_write_tokens: 0,
+        output_tokens: 1,
+        cost: 0.0,
+        status: 200,
+        duration_ms: 1,
+        stream: false,
+        user_agent: "custom-tool/9.9".to_string(),
+        error: String::new(),
+        path: "/v1/chat/completions".to_string(),
+    };
+    db.record_usage(&usage).unwrap();
+    usage.request_id = "req-ua-2".to_string();
+    usage.user_agent = "cursor-agent/1.0.0".to_string();
+    db.record_usage(&usage).unwrap();
+
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/config")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        value["header_candidates"]["user_agents"][0],
+        "cursor-agent/1.0.0"
+    );
+    assert!(value["header_candidates"]["user_agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|candidate| candidate == "custom-tool/9.9"));
+}
+
+#[tokio::test]
 async fn login_returns_jwt_for_default_admin_password() {
     let dir = tempfile::tempdir().unwrap();
     openrelay::config::ensure_files(dir.path()).unwrap();

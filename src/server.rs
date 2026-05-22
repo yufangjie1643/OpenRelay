@@ -401,6 +401,14 @@ async fn get_config(
             }
         }
     }
+    if let Some(root) = safe.as_object_mut() {
+        root.insert(
+            "header_candidates".to_string(),
+            json!({
+                "user_agents": state.database.user_agent_candidates_async(30).await?
+            }),
+        );
+    }
     Ok(Json(safe).into_response())
 }
 
@@ -417,6 +425,7 @@ async fn post_config(
             "virtual_keys".to_string(),
             serde_json::to_value(&current.virtual_keys)?,
         );
+        incoming.remove("header_candidates");
     }
     let mut incoming: AppConfig = serde_json::from_value(incoming_value)?;
     incoming.admin = current.admin;
