@@ -81,6 +81,50 @@ pub struct UsagePage {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageTrendBucket {
+    pub period: String,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub cached_tokens: u64,
+    pub cached_write_tokens: u64,
+    pub output_tokens: u64,
+    pub cost: f64,
+    pub cache_hit_rate: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageLeaderboardEntry {
+    pub name: String,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub cached_tokens: u64,
+    pub output_tokens: u64,
+    pub cost: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageHighFrequency {
+    pub minute: String,
+    pub key_name: String,
+    pub model: String,
+    pub requests: u64,
+    pub threshold: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageAnalytics {
+    pub period: String,
+    pub trends: Vec<UsageTrendBucket>,
+    pub top_models_by_cost: Vec<UsageLeaderboardEntry>,
+    pub top_keys_by_requests: Vec<UsageLeaderboardEntry>,
+    pub high_frequency: Vec<UsageHighFrequency>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ConversationEntry {
     pub filename: String,
     pub timestamp: String,
@@ -192,6 +236,45 @@ impl Database {
         tokio::task::spawn_blocking(move || db.usage_page(page, page_size))
             .await
             .map_err(|err| DatabaseError::BlockingTask(err.to_string()))?
+    }
+
+    pub fn usage_analytics(
+        &self,
+        period: &str,
+        limit: u64,
+        high_frequency_threshold: u64,
+    ) -> Result<UsageAnalytics, DatabaseError> {
+        let normalized_period = normalize_period(period);
+        let period_expr = usage_period_expr(normalized_period);
+        let limit = limit.clamp(1, 90) as i64;
+        let high_frequency_threshold = high_frequency_threshold.max(2);
+        let conn = self.lock_conn()?;
+        let trends = usage_trends(&conn, normalized_period, period_expr, limit)?;
+        let top_models_by_cost = leaderboard(&conn, "model", "COALESCE(SUM(cost), 0) DESC", 8)?;
+        let top_keys_by_requests = leaderboard(&conn, "key_name", "COUNT(*) DESC", 8)?;
+        let high_frequency = high_frequency_usage(&conn, high_frequency_threshold, 20)?;
+
+        Ok(UsageAnalytics {
+            period: normalized_period.to_string(),
+            trends,
+            top_models_by_cost,
+            top_keys_by_requests,
+            high_frequency,
+        })
+    }
+
+    pub async fn usage_analytics_async(
+        &self,
+        period: String,
+        limit: u64,
+        high_frequency_threshold: u64,
+    ) -> Result<UsageAnalytics, DatabaseError> {
+        let db = self.clone();
+        tokio::task::spawn_blocking(move || {
+            db.usage_analytics(&period, limit, high_frequency_threshold)
+        })
+        .await
+        .map_err(|err| DatabaseError::BlockingTask(err.to_string()))?
     }
 
     pub fn conversation_index_files(
@@ -614,6 +697,135 @@ fn grouped_buckets(
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(pairs.into_iter().collect())
+}
+
+fn normalize_period(period: &str) -> &'static str {
+    match period.trim().to_ascii_lowercase().as_str() {
+        "week" => "week",
+        "month" => "month",
+        _ => "day",
+    }
+}
+
+fn usage_period_expr(period: &str) -> &'static str {
+    match period {
+        "week" => "strftime('%Y-W%W', timestamp)",
+        "month" => "substr(timestamp, 1, 7)",
+        _ => "substr(timestamp, 1, 10)",
+    }
+}
+
+fn usage_trends(
+    conn: &Connection,
+    period: &str,
+    period_expr: &str,
+    limit: i64,
+) -> Result<Vec<UsageTrendBucket>, DatabaseError> {
+    let sql = format!(
+        "SELECT bucket, requests, input_tokens, cached_tokens, cached_write_tokens,
+                output_tokens, cost
+         FROM (
+            SELECT {period_expr} AS bucket,
+                   COUNT(*) AS requests,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+                   COALESCE(SUM(cached_write_tokens), 0) AS cached_write_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COALESCE(SUM(cost), 0) AS cost
+            FROM usage_logs
+            GROUP BY bucket
+            HAVING bucket IS NOT NULL AND bucket != ''
+            ORDER BY bucket DESC
+            LIMIT ?1
+         )
+         ORDER BY bucket ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            let input_tokens = row.get::<_, i64>(2)?.max(0) as u64;
+            let cached_tokens = row.get::<_, i64>(3)?.max(0) as u64;
+            let period_value: String = row.get(0)?;
+            Ok(UsageTrendBucket {
+                period: if period == "week" && period_value.is_empty() {
+                    "unknown".to_string()
+                } else {
+                    period_value
+                },
+                requests: row.get::<_, i64>(1)?.max(0) as u64,
+                input_tokens,
+                cached_tokens,
+                cached_write_tokens: row.get::<_, i64>(4)?.max(0) as u64,
+                output_tokens: row.get::<_, i64>(5)?.max(0) as u64,
+                cost: row.get(6)?,
+                cache_hit_rate: if input_tokens == 0 {
+                    0.0
+                } else {
+                    round2(cached_tokens as f64 * 100.0 / input_tokens as f64)
+                },
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn leaderboard(
+    conn: &Connection,
+    column: &str,
+    order_by: &str,
+    limit: i64,
+) -> Result<Vec<UsageLeaderboardEntry>, DatabaseError> {
+    let sql = format!(
+        "SELECT {column}, COUNT(*), COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(cost), 0)
+         FROM usage_logs
+         GROUP BY {column}
+         HAVING {column} IS NOT NULL AND {column} != ''
+         ORDER BY {order_by}, {column} ASC
+         LIMIT ?1"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            Ok(UsageLeaderboardEntry {
+                name: row.get(0)?,
+                requests: row.get::<_, i64>(1)?.max(0) as u64,
+                input_tokens: row.get::<_, i64>(2)?.max(0) as u64,
+                cached_tokens: row.get::<_, i64>(3)?.max(0) as u64,
+                output_tokens: row.get::<_, i64>(4)?.max(0) as u64,
+                cost: row.get(5)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn high_frequency_usage(
+    conn: &Connection,
+    threshold: u64,
+    limit: i64,
+) -> Result<Vec<UsageHighFrequency>, DatabaseError> {
+    let mut stmt = conn.prepare(
+        "SELECT substr(timestamp, 1, 16) AS minute, key_name, model, COUNT(*) AS requests
+         FROM usage_logs
+         GROUP BY minute, key_name, model
+         HAVING minute IS NOT NULL AND minute != '' AND COUNT(*) >= ?1
+         ORDER BY requests DESC, minute DESC, key_name ASC, model ASC
+         LIMIT ?2",
+    )?;
+    let rows = stmt
+        .query_map(params![threshold as i64, limit], |row| {
+            Ok(UsageHighFrequency {
+                minute: row.get(0)?,
+                key_name: row.get(1)?,
+                model: row.get(2)?,
+                requests: row.get::<_, i64>(3)?.max(0) as u64,
+                threshold,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 fn row_to_usage_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageLog> {

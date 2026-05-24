@@ -1,7 +1,14 @@
+use crate::backups::{
+    create_config_backup, export_current_config, list_config_backups, load_backup_config,
+    restore_config_backup, BackupError,
+};
 use crate::config::{
     load_config, save_config, AppConfig, ConfigError, ConversationStorage, VirtualKeyConfig,
 };
-use crate::database::{ConversationEntry, Database, DatabaseError, UsageLog};
+use crate::database::{
+    ConversationEntry, Database, DatabaseError, UsageBucket, UsageLog, UsageStats,
+};
+use crate::health::{check_all_providers, check_provider};
 use crate::migration::{migrate_legacy_data, MigrationError};
 use crate::paths::{data_root_from_env, static_root_from_env, AppPaths};
 use crate::proxy::{
@@ -10,8 +17,10 @@ use crate::proxy::{
     get_request_model, is_gemini_models_endpoint, is_models_endpoint, resolve_provider,
     rewrite_json_model, KeyCheck,
 };
+use crate::release::{app_status, check_update, set_startup_enabled, StartupRequest};
+use crate::secrets::{audit_security, protect_config_secrets, SecretError};
 use axum::body::{to_bytes, Body, Bytes};
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, Request, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
@@ -28,7 +37,7 @@ use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration as StdDuration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
@@ -50,6 +59,10 @@ pub enum ServerError {
     Database(#[from] DatabaseError),
     #[error("migration error: {0}")]
     Migration(#[from] MigrationError),
+    #[error("backup error: {0}")]
+    Backup(#[from] BackupError),
+    #[error("secret error: {0}")]
+    Secret(#[from] SecretError),
     #[error("JWT error: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
     #[error("invalid header value: {0}")]
@@ -204,11 +217,98 @@ struct UsageQuery {
     token: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct UsageAnalyticsQuery {
+    #[serde(default)]
+    period: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ValidateConfigQuery {
+    #[serde(default)]
+    reachability: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportConfigQuery {
+    #[serde(default)]
+    redacted: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportConfigRequest {
+    config: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PresetPricing {
+    input: f64,
+    cached_input: f64,
+    cached_write: f64,
+    output: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PresetModel {
+    id: &'static str,
+    name: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pricing: Option<PresetPricing>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProviderPreset {
+    id: &'static str,
+    name: &'static str,
+    #[serde(rename = "type")]
+    provider_type: &'static str,
+    base_url: &'static str,
+    api_key_placeholder: &'static str,
+    user_agent: &'static str,
+    models: Vec<PresetModel>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigIssue {
+    severity: &'static str,
+    code: &'static str,
+    path: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BudgetWarning {
+    kind: &'static str,
+    name: String,
+    used: f64,
+    budget: f64,
+    percent: f64,
+    level: &'static str,
+}
+
 pub fn build_router(state: ServerState) -> Router {
     Router::new()
         .route("/api/login", post(login))
         .route("/api/change-password", post(change_password))
+        .route("/api/app/status", get(get_app_status))
+        .route("/api/app/update-check", get(get_app_update_check))
+        .route("/api/app/startup", post(post_app_startup))
+        .route("/api/security/audit", get(get_security_audit))
+        .route("/api/security/protect-secrets", post(post_protect_secrets))
         .route("/api/config", get(get_config).post(post_config))
+        .route(
+            "/api/config/backups",
+            get(get_config_backups).post(post_config_backup),
+        )
+        .route("/api/config/backups/:id/export", get(export_config_backup))
+        .route(
+            "/api/config/backups/:id/restore",
+            post(restore_config_backup_route),
+        )
+        .route("/api/config/import", post(import_config))
+        .route("/api/config/validate", post(validate_config))
         .route("/api/restart-proxy", post(restart_proxy))
         .route("/api/pricing", get(get_pricing).post(post_pricing))
         .route("/api/limits", get(get_limits).post(post_limits))
@@ -221,7 +321,13 @@ pub fn build_router(state: ServerState) -> Router {
             put(put_virtual_key).delete(delete_virtual_key),
         )
         .route("/api/test-provider", post(test_provider))
+        .route("/api/provider-presets", get(get_provider_presets))
+        .route(
+            "/api/providers/health",
+            get(get_provider_health).post(post_provider_health),
+        )
         .route("/api/detect-models", get(detect_models))
+        .route("/api/usage/analytics", get(get_usage_analytics))
         .route("/api/usage", get(get_usage))
         .route("/api/usage/export", get(export_usage))
         .route("/api/usage/clear", post(clear_usage))
@@ -385,6 +491,122 @@ async fn change_password(
     Ok(Json(json!({ "success": true })).into_response())
 }
 
+async fn get_app_status(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    Ok(Json(app_status(&state.root, &state.static_root)).into_response())
+}
+
+async fn get_app_update_check(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    Ok(Json(check_update(&state.client).await).into_response())
+}
+
+async fn post_app_startup(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Json(payload): Json<StartupRequest>,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let startup = set_startup_enabled(payload.enabled)?;
+    Ok(Json(json!({ "success": true, "startup": startup })).into_response())
+}
+
+async fn get_security_audit(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let cfg = state.current_config().await;
+    let findings = audit_security(&state.root, &cfg, std::env::var_os("JWT_SECRET").is_some())?;
+    let ok = !findings.iter().any(|finding| finding.severity == "danger");
+    Ok(Json(json!({ "ok": ok, "findings": findings })).into_response())
+}
+
+async fn post_protect_secrets(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let cfg = state.current_config().await;
+    let result = protect_config_secrets(&state.root, &cfg)?;
+    state.replace_config(load_config(&state.root)?).await;
+    Ok(Json(json!({
+        "success": result.supported,
+        "supported": result.supported,
+        "enabled": result.enabled,
+        "protectedCount": result.protected_count,
+        "message": result.message
+    }))
+    .into_response())
+}
+
+async fn get_config_backups(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    Ok(Json(json!({ "backups": list_config_backups(&state.root)? })).into_response())
+}
+
+async fn post_config_backup(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let cfg = state.current_config().await;
+    let backup = create_config_backup(&state.root, &cfg, "manual")?;
+    Ok(Json(json!({ "success": true, "backup": backup })).into_response())
+}
+
+async fn export_config_backup(
+    State(state): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<ExportConfigQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let cfg = if id == "current" {
+        state.current_config().await
+    } else {
+        load_backup_config(&state.root, &id)?
+    };
+    let value = export_current_config(&cfg, query.redacted.unwrap_or(true))?;
+    Ok(Json(json!({ "config": value })).into_response())
+}
+
+async fn restore_config_backup_route(
+    State(state): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let current = state.current_config().await;
+    create_config_backup(&state.root, &current, "before-restore")?;
+    let restored = restore_config_backup(&state.root, &id)?;
+    state.replace_config(restored).await;
+    Ok(Json(json!({ "success": true })).into_response())
+}
+
+async fn import_config(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Json(payload): Json<ImportConfigRequest>,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let imported: AppConfig = serde_json::from_value(payload.config)?;
+    let current = state.current_config().await;
+    create_config_backup(&state.root, &current, "before-import")?;
+    save_config(&state.root, &imported)?;
+    state.replace_config(imported).await;
+    Ok(Json(json!({ "success": true })).into_response())
+}
+
 async fn get_config(
     State(state): State<ServerState>,
     headers: HeaderMap,
@@ -427,12 +649,46 @@ async fn post_config(
         );
         incoming.remove("header_candidates");
     }
+    create_config_backup(&state.root, &current, "before-config-save")?;
     let mut incoming: AppConfig = serde_json::from_value(incoming_value)?;
     incoming.admin = current.admin;
     incoming.virtual_keys = current.virtual_keys;
     save_config(&state.root, &incoming)?;
     state.replace_config(incoming).await;
     Ok(Json(json!({ "success": true })).into_response())
+}
+
+async fn validate_config(
+    State(state): State<ServerState>,
+    Query(query): Query<ValidateConfigQuery>,
+    headers: HeaderMap,
+    Json(mut value): Json<Value>,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let current = state.current_config().await;
+    if let Some(incoming) = value.as_object_mut() {
+        incoming.insert("admin".to_string(), serde_json::to_value(&current.admin)?);
+        incoming.insert(
+            "virtual_keys".to_string(),
+            serde_json::to_value(&current.virtual_keys)?,
+        );
+        incoming.remove("header_candidates");
+    }
+    let cfg: AppConfig = serde_json::from_value(value)?;
+    let mut issues = validate_config_issues(&cfg);
+    if query.reachability.unwrap_or(false) {
+        issues.extend(validate_provider_reachability(&state, &cfg).await);
+    }
+    let ok = !issues.iter().any(|issue| issue.severity == "error");
+    Ok(Json(json!({ "ok": ok, "issues": issues })).into_response())
+}
+
+async fn get_provider_presets(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    Ok(Json(json!({ "presets": provider_presets() })).into_response())
 }
 
 async fn restart_proxy() -> Json<Value> {
@@ -635,6 +891,26 @@ async fn test_provider(
     Ok(Json(json!({ "success": true, "models": models })).into_response())
 }
 
+async fn get_provider_health(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let cfg = state.current_config().await;
+    let providers = check_all_providers(&state.client, &cfg).await;
+    Ok(Json(json!({ "providers": providers })).into_response())
+}
+
+async fn post_provider_health(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Json(provider): Json<crate::config::ProviderConfig>,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let provider = check_provider(&state.client, &provider).await;
+    Ok(Json(json!({ "provider": provider })).into_response())
+}
+
 async fn detect_models(
     State(state): State<ServerState>,
     headers: HeaderMap,
@@ -667,6 +943,24 @@ async fn get_usage(
             .usage_page_async(query.page.unwrap_or(1), query.page_size.unwrap_or(20))
             .await?,
     )
+    .into_response())
+}
+
+async fn get_usage_analytics(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<UsageAnalyticsQuery>,
+) -> Result<Response, ServerError> {
+    require_admin(&state, &headers)?;
+    let period = query.period.unwrap_or_else(|| "day".to_string());
+    let analytics = state.database.usage_analytics_async(period, 90, 10).await?;
+    let cfg = state.current_config().await;
+    let page = state.database.usage_page_async(1, 1).await?;
+    let budget_warnings = build_budget_warnings(&cfg, &page.stats);
+    Ok(Json(json!({
+        "analytics": analytics,
+        "budgetWarnings": budget_warnings
+    }))
     .into_response())
 }
 
@@ -1676,4 +1970,427 @@ fn provider_base_url(provider_type: &str, base_url: &str) -> String {
         "gemini" => "https://generativelanguage.googleapis.com/v1beta".to_string(),
         _ => "https://api.openai.com/v1".to_string(),
     }
+}
+
+fn provider_presets() -> Vec<ProviderPreset> {
+    vec![
+        ProviderPreset {
+            id: "openai",
+            name: "OpenAI",
+            provider_type: "openai",
+            base_url: "https://api.openai.com/v1",
+            api_key_placeholder: "os.environ/OPENAI_API_KEY",
+            user_agent: "OpenRelay-Gateway/1.0",
+            models: vec![
+                preset_model("gpt-4o-mini", 0.15, 0.075, 0.0, 0.60),
+                preset_model("gpt-4o", 2.50, 1.25, 0.0, 10.00),
+                preset_model("gpt-4.1-mini", 0.40, 0.10, 0.0, 1.60),
+            ],
+        },
+        ProviderPreset {
+            id: "gemini",
+            name: "Google Gemini",
+            provider_type: "gemini",
+            base_url: "https://generativelanguage.googleapis.com/v1beta",
+            api_key_placeholder: "os.environ/GEMINI_API_KEY",
+            user_agent: "OpenRelay-Gateway/1.0",
+            models: vec![
+                preset_model("gemini-2.5-flash", 0.30, 0.075, 0.0, 2.50),
+                preset_model("gemini-2.5-pro", 1.25, 0.31, 0.0, 10.00),
+                preset_model("gemini-1.5-flash", 0.075, 0.01875, 0.0, 0.30),
+            ],
+        },
+        ProviderPreset {
+            id: "anthropic",
+            name: "Anthropic",
+            provider_type: "anthropic",
+            base_url: "https://api.anthropic.com/v1",
+            api_key_placeholder: "os.environ/ANTHROPIC_API_KEY",
+            user_agent: "OpenRelay-Gateway/1.0",
+            models: vec![
+                preset_model("claude-sonnet-4-5", 3.0, 0.30, 3.75, 15.0),
+                preset_model("claude-haiku-4-5", 1.0, 0.10, 1.25, 5.0),
+                preset_model("claude-3-5-sonnet-20241022", 3.0, 0.30, 3.75, 15.0),
+            ],
+        },
+        ProviderPreset {
+            id: "deepseek",
+            name: "DeepSeek",
+            provider_type: "openai-custom",
+            base_url: "https://api.deepseek.com/v1",
+            api_key_placeholder: "os.environ/DEEPSEEK_API_KEY",
+            user_agent: "OpenRelay-Gateway/1.0",
+            models: vec![
+                preset_model("deepseek-chat", 0.14, 0.028, 0.0, 0.28),
+                preset_model("deepseek-reasoner", 0.14, 0.028, 0.0, 0.28),
+                preset_model("deepseek-v4-pro", 1.74, 0.145, 0.0, 3.48),
+            ],
+        },
+        ProviderPreset {
+            id: "openrouter",
+            name: "OpenRouter",
+            provider_type: "openai-custom",
+            base_url: "https://openrouter.ai/api/v1",
+            api_key_placeholder: "os.environ/OPENROUTER_API_KEY",
+            user_agent: "OpenRelay-Gateway/1.0",
+            models: vec![
+                preset_model("anthropic/claude-sonnet-4.6", 3.0, 0.30, 3.75, 15.0),
+                preset_model("deepseek/deepseek-v3.2", 0.28, 0.28, 0.28, 0.40),
+                preset_model("google/gemini-3-flash-preview", 0.30, 0.075, 0.0, 2.50),
+            ],
+        },
+        ProviderPreset {
+            id: "siliconflow",
+            name: "SiliconFlow",
+            provider_type: "openai-custom",
+            base_url: "https://api.siliconflow.com/v1",
+            api_key_placeholder: "os.environ/SILICONFLOW_API_KEY",
+            user_agent: "OpenRelay-Gateway/1.0",
+            models: vec![
+                preset_model("Qwen/Qwen3-30B-A3B-Thinking-2507", 0.09, 0.09, 0.09, 0.30),
+                preset_model("Qwen/Qwen2.5-Coder-32B-Instruct", 0.18, 0.18, 0.18, 0.18),
+                preset_model("deepseek-ai/DeepSeek-V3.2", 0.50, 0.50, 0.50, 2.00),
+            ],
+        },
+        ProviderPreset {
+            id: "siliconflow-cn",
+            name: "SiliconFlow (China)",
+            provider_type: "openai-custom",
+            base_url: "https://api.siliconflow.cn/v1",
+            api_key_placeholder: "os.environ/SILICONFLOW_CN_API_KEY",
+            user_agent: "OpenRelay-Gateway/1.0",
+            models: vec![
+                preset_model("Qwen/Qwen3.5-397B-A17B", 0.29, 0.29, 0.29, 1.74),
+                preset_model("Qwen/Qwen3.5-35B-A3B", 0.23, 0.23, 0.23, 1.86),
+                preset_model("siliconflow/deepseek-v3.2", 0.14, 0.14, 0.14, 0.28),
+                preset_model("siliconflow/deepseek-r1-0528", 0.70, 0.70, 0.70, 2.50),
+            ],
+        },
+        ProviderPreset {
+            id: "bailian",
+            name: "Alibaba Cloud Bailian",
+            provider_type: "openai-custom",
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            api_key_placeholder: "os.environ/DASHSCOPE_API_KEY",
+            user_agent: "OpenRelay-Gateway/1.0",
+            models: vec![
+                preset_model("qwen-plus", 0.11, 0.11, 0.11, 0.30),
+                preset_model("qwen-turbo", 0.05, 0.05, 0.05, 0.20),
+                preset_model("qwen-max", 1.20, 1.20, 1.20, 6.00),
+                preset_model("qwq-plus", 0.40, 0.40, 0.40, 1.60),
+            ],
+        },
+    ]
+}
+
+fn preset_model(
+    id: &'static str,
+    input: f64,
+    cached_input: f64,
+    cached_write: f64,
+    output: f64,
+) -> PresetModel {
+    PresetModel {
+        id,
+        name: id,
+        pricing: Some(PresetPricing {
+            input,
+            cached_input,
+            cached_write,
+            output,
+        }),
+    }
+}
+
+fn validate_config_issues(cfg: &AppConfig) -> Vec<ConfigIssue> {
+    let mut issues = Vec::new();
+    let mut model_owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for (provider_index, provider) in cfg.providers.iter().enumerate() {
+        let provider_path = format!("providers[{provider_index}]");
+        if provider.name.trim().is_empty() {
+            issues.push(config_issue(
+                "error",
+                "missing_provider_name",
+                &provider_path,
+                "服务商名称不能为空",
+            ));
+        }
+        if provider.api_key.trim().is_empty() {
+            issues.push(config_issue(
+                "error",
+                "missing_api_key",
+                &format!("{provider_path}.api_key"),
+                format!("{} 缺少 API Key", provider_display_name(provider)),
+            ));
+        }
+        if let Some(base_url) = provider
+            .base_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            match url::Url::parse(base_url.trim()) {
+                Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => {}
+                _ => issues.push(config_issue(
+                    "error",
+                    "invalid_base_url",
+                    &format!("{provider_path}.base_url"),
+                    format!(
+                        "{} 的 Base URL 必须以 http:// 或 https:// 开头",
+                        provider_display_name(provider)
+                    ),
+                )),
+            }
+        }
+        if provider.models.is_empty() {
+            issues.push(config_issue(
+                "warning",
+                "missing_models",
+                &format!("{provider_path}.models"),
+                format!("{} 还没有模型映射", provider_display_name(provider)),
+            ));
+        }
+        for (model_index, model) in provider.models.iter().enumerate() {
+            let alias = model.model_name.trim();
+            if alias.is_empty() {
+                issues.push(config_issue(
+                    "error",
+                    "missing_model_alias",
+                    &format!("{provider_path}.models[{model_index}].model_name"),
+                    format!("{} 存在空模型别名", provider_display_name(provider)),
+                ));
+                continue;
+            }
+            model_owners
+                .entry(alias.to_string())
+                .or_default()
+                .push(provider_display_name(provider));
+            if !pricing_present(&cfg.pricing, alias) {
+                issues.push(config_issue(
+                    "warning",
+                    "missing_pricing",
+                    &format!("pricing.{alias}"),
+                    format!("{alias} 缺少有效输入/输出定价，成本统计会低估"),
+                ));
+            }
+        }
+    }
+
+    for (model, owners) in model_owners {
+        if owners.len() > 1 {
+            issues.push(config_issue(
+                "error",
+                "duplicate_model_alias",
+                &format!("providers.models.{model}"),
+                format!("模型别名 {model} 在多个服务商中重复: {}", owners.join(", ")),
+            ));
+        }
+    }
+
+    issues
+}
+
+fn config_issue(
+    severity: &'static str,
+    code: &'static str,
+    path: &str,
+    message: impl Into<String>,
+) -> ConfigIssue {
+    ConfigIssue {
+        severity,
+        code,
+        path: path.to_string(),
+        message: message.into(),
+    }
+}
+
+fn provider_display_name(provider: &crate::config::ProviderConfig) -> String {
+    if provider.name.trim().is_empty() {
+        provider.id.clone()
+    } else {
+        provider.name.clone()
+    }
+}
+
+fn pricing_present(pricing: &Value, model: &str) -> bool {
+    let Some(entry) = pricing.get(model) else {
+        return false;
+    };
+    let input = entry.get("input").and_then(Value::as_f64).unwrap_or(0.0);
+    let output = entry.get("output").and_then(Value::as_f64).unwrap_or(0.0);
+    let cached = entry
+        .get("cached_input")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let cached_write = entry
+        .get("cached_write")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    input > 0.0 || output > 0.0 || cached > 0.0 || cached_write > 0.0
+}
+
+async fn validate_provider_reachability(state: &ServerState, cfg: &AppConfig) -> Vec<ConfigIssue> {
+    let mut issues = Vec::new();
+
+    for (provider_index, provider) in cfg.providers.iter().enumerate() {
+        let provider_path = format!("providers[{provider_index}]");
+        if provider.api_key.trim().is_empty() {
+            continue;
+        }
+        if let Some(base_url) = provider
+            .base_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            if url::Url::parse(base_url.trim()).is_err() {
+                continue;
+            }
+        }
+
+        let resolved_key = resolve_api_key(&provider.api_key);
+        if provider.api_key.starts_with("os.environ/") && resolved_key == provider.api_key {
+            issues.push(config_issue(
+                "warning",
+                "unresolved_api_key_env",
+                &format!("{provider_path}.api_key"),
+                format!(
+                    "{} 使用的环境变量暂未设置，已跳过可达性检查",
+                    provider_display_name(provider)
+                ),
+            ));
+            continue;
+        }
+
+        let base_url = provider_base_url(
+            &provider.provider_type,
+            provider.base_url.as_deref().unwrap_or_default(),
+        );
+        let is_gemini = provider.provider_type == "gemini";
+        let url = if is_gemini {
+            build_gemini_upstream_url(&base_url, "/v1beta/models", "", "")
+        } else {
+            build_upstream_url(&base_url, "/v1/models", "")
+        };
+        let Ok(url) = url else {
+            continue;
+        };
+
+        let mut request = state
+            .client
+            .get(url)
+            .timeout(StdDuration::from_secs(3))
+            .header(
+                header::USER_AGENT,
+                provider
+                    .user_agent
+                    .clone()
+                    .unwrap_or_else(|| "OpenRelay-Gateway/1.0".to_string()),
+            );
+        request = if is_gemini {
+            request.header("x-goog-api-key", resolved_key)
+        } else {
+            request.header(header::AUTHORIZATION, format!("Bearer {resolved_key}"))
+        };
+
+        match request.send().await {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => issues.push(config_issue(
+                "warning",
+                "provider_unreachable",
+                &format!("{provider_path}.base_url"),
+                format!(
+                    "{} 可达性检查返回 HTTP {}",
+                    provider_display_name(provider),
+                    response.status()
+                ),
+            )),
+            Err(err) => issues.push(config_issue(
+                "warning",
+                "provider_unreachable",
+                &format!("{provider_path}.base_url"),
+                format!("{} 暂时不可达: {}", provider_display_name(provider), err),
+            )),
+        }
+    }
+
+    issues
+}
+
+fn build_budget_warnings(cfg: &AppConfig, stats: &UsageStats) -> Vec<BudgetWarning> {
+    let mut warnings = Vec::new();
+    if let Some(budget) = cfg
+        .limits
+        .get("global")
+        .and_then(|global| global.get("budget"))
+        .and_then(Value::as_f64)
+    {
+        if let Some(warning) = budget_warning("global", "全局预算", stats.total_cost, budget) {
+            warnings.push(warning);
+        }
+    }
+    for (model, bucket) in &stats.by_model {
+        let Some(budget) = cfg
+            .limits
+            .get(model)
+            .and_then(|limits| limits.get("budget"))
+            .and_then(Value::as_f64)
+        else {
+            continue;
+        };
+        if let Some(warning) = bucket_budget_warning("model", model, bucket, budget) {
+            warnings.push(warning);
+        }
+    }
+    for key in &cfg.virtual_keys {
+        let Some(budget) = key.budget else {
+            continue;
+        };
+        let Some(bucket) = stats.by_key.get(&key.name) else {
+            continue;
+        };
+        if let Some(warning) = bucket_budget_warning("key", &key.name, bucket, budget) {
+            warnings.push(warning);
+        }
+    }
+    warnings
+}
+
+fn bucket_budget_warning(
+    kind: &'static str,
+    name: &str,
+    bucket: &UsageBucket,
+    budget: f64,
+) -> Option<BudgetWarning> {
+    budget_warning(kind, name, bucket.cost, budget)
+}
+
+fn budget_warning(
+    kind: &'static str,
+    name: impl Into<String>,
+    used: f64,
+    budget: f64,
+) -> Option<BudgetWarning> {
+    if budget <= 0.0 {
+        return None;
+    }
+    let percent = round2(used * 100.0 / budget);
+    if percent < 80.0 {
+        return None;
+    }
+    Some(BudgetWarning {
+        kind,
+        name: name.into(),
+        used,
+        budget,
+        percent,
+        level: if percent >= 100.0 {
+            "danger"
+        } else {
+            "warning"
+        },
+    })
+}
+
+fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
 }

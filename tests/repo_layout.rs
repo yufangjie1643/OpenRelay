@@ -10,6 +10,9 @@ fn repository_keeps_rust_runtime_layout_only() {
     assert!(root.join("public").join("login.html").exists());
     assert!(root.join("assets").join("openrelay.ico").exists());
     assert!(root.join("build.bat").exists());
+    assert!(root.join("install.ps1").exists());
+    assert!(root.join("uninstall.ps1").exists());
+    assert!(root.join("package-windows.ps1").exists());
 
     assert!(!root.join("web").join("server.js").exists());
     assert!(!root.join("web").join("package.json").exists());
@@ -97,4 +100,39 @@ fn rust_proxy_hot_path_uses_streaming_cache_async_db_and_tokenizer() {
     assert!(database.contains("spawn_blocking"));
     assert!(cargo.contains("tiktoken-rs"));
     assert!(!proxy.contains("/ 4.0"));
+}
+
+#[test]
+fn frontend_contains_provider_wizard_and_enhanced_usage_dashboard() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let index = std::fs::read_to_string(root.join("public").join("index.html")).unwrap();
+    let server = std::fs::read_to_string(root.join("src").join("server.rs")).unwrap();
+    let database = std::fs::read_to_string(root.join("src").join("database.rs")).unwrap();
+
+    assert!(server.contains("/api/provider-presets"));
+    assert!(server.contains("/api/providers/health"));
+    assert!(server.contains("/api/config/validate"));
+    assert!(server.contains("/api/app/status"));
+    assert!(server.contains("/api/app/update-check"));
+    assert!(server.contains("/api/security/audit"));
+    assert!(server.contains("/api/config/backups"));
+    assert!(server.contains("provider_unreachable"));
+    assert!(server.contains("/api/usage/analytics"));
+    assert!(database.contains("usage_analytics"));
+    assert!(index.contains("providerPresetSelect"));
+    assert!(index.contains("applyProviderPreset"));
+    assert!(index.contains("runConfigHealthCheck"));
+    assert!(index.contains("reachability=true"));
+    assert!(index.contains("usagePeriod"));
+    assert!(index.contains("usageTrendChart"));
+    assert!(index.contains("usageTopModels"));
+    assert!(index.contains("usageTopKeys"));
+    assert!(index.contains("usageAnomalies"));
+    assert!(index.contains("budgetWarnings"));
+    assert!(index.contains("checkProviderHealth"));
+    assert!(index.contains("loadBackups"));
+    assert!(index.contains("runSecurityAudit"));
+    assert!(index.contains("checkForUpdates"));
+    assert!(index.contains("toggleStartup"));
+    assert!(index.contains("bailian"));
 }

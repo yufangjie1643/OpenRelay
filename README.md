@@ -11,6 +11,9 @@ OpenRelay is a personal unified LLM API gateway. It is now a Rust-first Windows 
 - 自动生成兼容配置 YAML：保存配置时同步写入本地 `openrelay-config.yaml`。
 - 虚拟密钥：支持模型白名单、预算、RPM、启用状态和过期时间。
 - SQLite 用量数据库：记录请求数、token、缓存 token、费用、状态码、耗时、User-Agent 和请求 ID。
+- 服务商健康检查：在管理面板中检查上游连通性、鉴权、限流/余额风险、延迟和模型数量。
+- 安全与备份：支持安全体检、Windows DPAPI 保护 Provider API Key、配置自动快照、脱敏导出、导入和回滚。
+- Windows 日常使用：提供安装/卸载/打包脚本、开机启动开关、版本状态和 GitHub Release 更新检查。
 - Windows 托盘：Rust exe 内置托盘图标，右键菜单为“打开管理面板”“重启服务”“退出 OpenRelay”。
 - 静态管理面板：`public/` 由 Rust 后端直接托管，不再依赖 Node.js 服务。
 - 用户数据目录：默认把配置、兼容 YAML、SQLite 数据库等运行数据保存到 `~\.openrelay`。
@@ -152,6 +155,9 @@ Gemini 原生端点同样会统一经过密钥校验、模型白名单、限额�
 ## Windows 构建
 
 - `build.bat`：编译 release 版 `target\release\openrelay.exe`。
+- `.\package-windows.ps1 -Zip`：生成 `dist\OpenRelay-v<version>-windows-x64` 发布目录和 zip 包。
+- `.\install.ps1 -Startup`：安装到 `%LOCALAPPDATA%\OpenRelay`，并可注册开机启动。
+- `.\uninstall.ps1`：移除安装目录和开机启动项；加 `-RemoveData` 会同时删除 `~\.openrelay` 数据目录。
 - 发布包中直接运行 `openrelay.exe` 即可启动托盘和后端服务。
 
 常用环境变量：

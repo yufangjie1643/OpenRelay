@@ -309,6 +309,518 @@ async fn usage_api_reads_sqlite_usage_database() {
 }
 
 #[tokio::test]
+async fn provider_presets_api_returns_wizard_seed_data() {
+    let dir = tempfile::tempdir().unwrap();
+    openrelay::config::ensure_files(dir.path()).unwrap();
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/provider-presets")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let presets = value["presets"].as_array().unwrap();
+    assert!(presets.iter().any(|preset| preset["id"] == "openrouter"));
+    assert!(presets.iter().any(|preset| preset["id"] == "bailian"));
+    let siliconflow_cn = presets
+        .iter()
+        .find(|preset| preset["id"] == "siliconflow-cn")
+        .unwrap();
+    assert_eq!(siliconflow_cn["base_url"], "https://api.siliconflow.cn/v1");
+    assert_eq!(
+        siliconflow_cn["api_key_placeholder"],
+        "os.environ/SILICONFLOW_CN_API_KEY"
+    );
+    assert!(siliconflow_cn["models"].as_array().unwrap().len() >= 3);
+}
+
+#[tokio::test]
+async fn provider_health_api_reports_success_latency_and_model_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let (upstream_url, shutdown, server) = spawn_models_upstream(StatusCode::OK).await;
+    let mut cfg = AppConfig::default();
+    cfg.providers.push(ProviderConfig {
+        id: "p1".to_string(),
+        name: "OpenAI".to_string(),
+        provider_type: "openai".to_string(),
+        base_url: Some(format!("{upstream_url}/v1")),
+        api_key: "provider-key".to_string(),
+        user_agent: None,
+        models: Vec::new(),
+    });
+    save_config(dir.path(), &cfg).unwrap();
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/providers/health")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["providers"][0]["status"], "ok");
+    assert_eq!(value["providers"][0]["code"], "available");
+    assert_eq!(value["providers"][0]["httpStatus"], 200);
+    assert_eq!(value["providers"][0]["modelCount"], 2);
+    assert!(value["providers"][0]["latencyMs"].as_u64().unwrap() > 0);
+
+    let _ = shutdown.send(());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn provider_health_api_classifies_auth_and_rate_limit_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let (auth_url, auth_shutdown, auth_server) =
+        spawn_models_upstream(StatusCode::UNAUTHORIZED).await;
+    let (rate_url, rate_shutdown, rate_server) =
+        spawn_models_upstream(StatusCode::TOO_MANY_REQUESTS).await;
+    let mut cfg = AppConfig::default();
+    cfg.providers.push(ProviderConfig {
+        id: "auth".to_string(),
+        name: "Auth Provider".to_string(),
+        provider_type: "openai".to_string(),
+        base_url: Some(format!("{auth_url}/v1")),
+        api_key: "provider-key".to_string(),
+        user_agent: None,
+        models: Vec::new(),
+    });
+    cfg.providers.push(ProviderConfig {
+        id: "rate".to_string(),
+        name: "Rate Provider".to_string(),
+        provider_type: "openai".to_string(),
+        base_url: Some(format!("{rate_url}/v1")),
+        api_key: "provider-key".to_string(),
+        user_agent: None,
+        models: Vec::new(),
+    });
+    save_config(dir.path(), &cfg).unwrap();
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/providers/health")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["providers"][0]["code"], "auth_failed");
+    assert_eq!(value["providers"][1]["code"], "rate_limited");
+
+    let _ = auth_shutdown.send(());
+    auth_server.await.unwrap();
+    let _ = rate_shutdown.send(());
+    rate_server.await.unwrap();
+}
+
+#[tokio::test]
+async fn config_validation_reports_save_blockers_and_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    openrelay::config::ensure_files(dir.path()).unwrap();
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+
+    let payload = json!({
+        "admin": {"username": "admin"},
+        "providers": [
+            {
+                "id": "p1",
+                "name": "Broken",
+                "type": "openai",
+                "base_url": "localhost:8000",
+                "api_key": "",
+                "models": [
+                    {"model_name": "dup-model", "model_id": "upstream-a"}
+                ]
+            },
+            {
+                "id": "p2",
+                "name": "Duplicate",
+                "type": "openai",
+                "base_url": "https://api.example.com/v1",
+                "api_key": "provider-key",
+                "models": [
+                    {"model_name": "dup-model", "model_id": "upstream-b"}
+                ]
+            }
+        ],
+        "pricing": {
+            "dup-model": {"input": 0, "cached_input": 0, "cached_write": 0, "output": 0}
+        }
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/config/validate")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["ok"], false);
+    let codes: Vec<&str> = value["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| issue["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"missing_api_key"));
+    assert!(codes.contains(&"invalid_base_url"));
+    assert!(codes.contains(&"duplicate_model_alias"));
+    assert!(codes.contains(&"missing_pricing"));
+}
+
+#[tokio::test]
+async fn config_validation_checks_provider_reachability_when_requested() {
+    std::env::remove_var("OPENRELAY_E2E_MISSING_KEY");
+    let dir = tempfile::tempdir().unwrap();
+    openrelay::config::ensure_files(dir.path()).unwrap();
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+
+    let payload = json!({
+        "admin": {"username": "admin"},
+        "providers": [
+            {
+                "id": "p1",
+                "name": "Env Provider",
+                "type": "openai",
+                "base_url": "http://127.0.0.1:9/v1",
+                "api_key": "os.environ/OPENRELAY_E2E_MISSING_KEY",
+                "models": [
+                    {"model_name": "env-model", "model_id": "upstream-env"}
+                ]
+            },
+            {
+                "id": "p2",
+                "name": "Closed Port",
+                "type": "openai",
+                "base_url": "http://127.0.0.1:9/v1",
+                "api_key": "provider-key",
+                "models": [
+                    {"model_name": "closed-model", "model_id": "upstream-closed"}
+                ]
+            }
+        ],
+        "pricing": {
+            "env-model": {"input": 0.1, "cached_input": 0.01, "cached_write": 0.02, "output": 0.2},
+            "closed-model": {"input": 0.1, "cached_input": 0.01, "cached_write": 0.02, "output": 0.2}
+        }
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/config/validate?reachability=true")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["ok"], true);
+    let codes: Vec<&str> = value["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| issue["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"unresolved_api_key_env"));
+    assert!(codes.contains(&"provider_unreachable"));
+}
+
+#[tokio::test]
+async fn config_save_creates_automatic_backup_before_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = AppConfig::default();
+    cfg.providers.push(ProviderConfig {
+        id: "old".to_string(),
+        name: "Old Provider".to_string(),
+        provider_type: "openai".to_string(),
+        base_url: Some("https://old.example.com/v1".to_string()),
+        api_key: "old-provider-key".to_string(),
+        user_agent: None,
+        models: vec![ModelConfig {
+            model_name: "old-model".to_string(),
+            model_id: "old-upstream".to_string(),
+        }],
+    });
+    save_config(dir.path(), &cfg).unwrap();
+
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+    let new_config = json!({
+        "providers": [{
+            "id": "new",
+            "name": "New Provider",
+            "type": "openai",
+            "base_url": "https://new.example.com/v1",
+            "api_key": "new-provider-key",
+            "models": [{"model_name": "new-model", "model_id": "new-upstream"}]
+        }],
+        "pricing": {},
+        "limits": {},
+        "router_settings": {"timeout": 60},
+        "litellm_settings": {"drop_params": true, "allowed_headers": ["*"]},
+        "general_settings": {"master_key": "openrelay-master"},
+        "conversation_storage": {"enabled": false, "directory": ""}
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/config")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(new_config.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/config/backups")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["backups"][0]["providerCount"], 1);
+    assert_eq!(load_config(dir.path()).unwrap().providers[0].id, "new");
+}
+
+#[tokio::test]
+async fn security_api_audits_and_protects_provider_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = AppConfig::default();
+    cfg.providers.push(ProviderConfig {
+        id: "p1".to_string(),
+        name: "OpenAI".to_string(),
+        provider_type: "openai".to_string(),
+        base_url: Some("https://api.example.com/v1".to_string()),
+        api_key: "provider-secret".to_string(),
+        user_agent: None,
+        models: Vec::new(),
+    });
+    save_config(dir.path(), &cfg).unwrap();
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/security/audit")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let codes: Vec<&str> = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"plaintext_provider_key"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/security/protect-secrets")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    if cfg!(windows) {
+        assert_eq!(value["supported"], true);
+        assert_eq!(value["protectedCount"], 1);
+        assert!(!std::fs::read_to_string(dir.path().join("config.json"))
+            .unwrap()
+            .contains("provider-secret"));
+    } else {
+        assert_eq!(value["supported"], false);
+    }
+}
+
+#[tokio::test]
+async fn app_status_exposes_version_paths_and_startup_state() {
+    let dir = tempfile::tempdir().unwrap();
+    openrelay::config::ensure_files(dir.path()).unwrap();
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/app/status")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
+    assert!(value["dataRoot"].as_str().unwrap().contains("Temp"));
+    assert!(value["startup"]["supported"].is_boolean());
+}
+
+#[tokio::test]
+async fn usage_analytics_api_returns_trends_rankings_anomalies_and_budget_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = AppConfig::default();
+    cfg.limits = json!({
+        "global": {"budget": 3.0},
+        "local-gpt": {"budget": 2.0}
+    });
+    cfg.virtual_keys.push(VirtualKeyConfig {
+        name: "team-a".to_string(),
+        key: "sk-team-a".to_string(),
+        enabled: Some(true),
+        allowed_models: None,
+        budget: Some(2.0),
+        rpm: None,
+        expires_at: None,
+    });
+    save_config(dir.path(), &cfg).unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    for i in 0..12 {
+        db.record_usage(&UsageLog {
+            timestamp: "2026-05-21T10:15:00Z".to_string(),
+            request_id: format!("req-burst-{i}"),
+            model: "local-gpt".to_string(),
+            key_name: "team-a".to_string(),
+            input_tokens: 100,
+            cached_tokens: 20,
+            cached_write_tokens: 0,
+            output_tokens: 40,
+            cost: 0.20,
+            status: 200,
+            duration_ms: 50,
+            stream: false,
+            user_agent: "test".to_string(),
+            error: String::new(),
+            path: "/v1/chat/completions".to_string(),
+        })
+        .unwrap();
+    }
+
+    let app = build_router(ServerState::new(dir.path().to_path_buf()));
+    let token = login_token(app.clone()).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/usage/analytics?period=day")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["analytics"]["period"], "day");
+    assert_eq!(value["analytics"]["trends"][0]["period"], "2026-05-21");
+    assert_eq!(
+        value["analytics"]["topModelsByCost"][0]["name"],
+        "local-gpt"
+    );
+    assert_eq!(value["analytics"]["topKeysByRequests"][0]["name"], "team-a");
+    assert_eq!(value["analytics"]["highFrequency"][0]["requests"], 12);
+    assert_eq!(value["budgetWarnings"][0]["level"], "warning");
+    assert!(value["budgetWarnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["kind"] == "global"));
+}
+
+#[tokio::test]
 async fn gemini_native_endpoint_uses_openrelay_key_and_records_usage() {
     let dir = tempfile::tempdir().unwrap();
     let (upstream_url, mut captured, shutdown, server) = spawn_gemini_upstream().await;
@@ -746,7 +1258,7 @@ async fn openai_stream_proxy_forwards_first_chunk_before_upstream_finishes() {
     let mut stream = response.bytes_stream();
     let first = stream.next().await.unwrap().unwrap();
     assert!(
-        started.elapsed() < Duration::from_millis(500),
+        started.elapsed() < Duration::from_millis(900),
         "first stream chunk was buffered for {:?}",
         started.elapsed()
     );
@@ -823,6 +1335,40 @@ async fn openai_json_response() -> Json<serde_json::Value> {
     }))
 }
 
+async fn spawn_models_upstream(
+    status: StatusCode,
+) -> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let app = Router::new().route(
+        "/*path",
+        any(move || async move {
+            (
+                status,
+                Json(json!({
+                    "data": [
+                        {"id": "gpt-a", "object": "model", "owned_by": "test"},
+                        {"id": "gpt-b", "object": "model", "owned_by": "test"}
+                    ],
+                    "error": {"message": "test failure"}
+                })),
+            )
+                .into_response()
+        }),
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .unwrap();
+    });
+    (format!("http://{addr}"), shutdown_tx, server)
+}
+
 async fn spawn_openai_slow_upstream() -> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>)
 {
     std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
@@ -872,7 +1418,7 @@ async fn openai_streaming_response() -> Response {
                 b"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n",
             )))
             .await;
-        sleep(Duration::from_millis(700)).await;
+        sleep(Duration::from_millis(1200)).await;
         let _ = tx
             .send(Ok(Bytes::from_static(
                 b"data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n",

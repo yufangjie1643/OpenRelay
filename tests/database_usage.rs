@@ -20,6 +20,21 @@ fn log_entry(model: &str, key_name: &str, input: u64, cached: u64, output: u64) 
     }
 }
 
+fn dated_log_entry(
+    timestamp: &str,
+    model: &str,
+    key_name: &str,
+    input: u64,
+    cached: u64,
+    output: u64,
+    cost: f64,
+) -> UsageLog {
+    let mut entry = log_entry(model, key_name, input, cached, output);
+    entry.timestamp = timestamp.to_string();
+    entry.cost = cost;
+    entry
+}
+
 #[test]
 fn sqlite_usage_database_records_stats_and_pages_entries() {
     let dir = tempfile::tempdir().unwrap();
@@ -112,4 +127,69 @@ fn sqlite_usage_database_lists_distinct_user_agent_candidates() {
             "claude-cli/2.0.0 (external, cli)".to_string()
         ]
     );
+}
+
+#[test]
+fn sqlite_usage_database_builds_usage_analytics_for_dashboard() {
+    let db = Database::memory().unwrap();
+    db.record_usage(&dated_log_entry(
+        "2026-05-20T10:00:00Z",
+        "cheap-model",
+        "team-a",
+        100,
+        25,
+        40,
+        0.10,
+    ))
+    .unwrap();
+    db.record_usage(&dated_log_entry(
+        "2026-05-20T11:00:00Z",
+        "expensive-model",
+        "team-a",
+        200,
+        50,
+        60,
+        2.50,
+    ))
+    .unwrap();
+    db.record_usage(&dated_log_entry(
+        "2026-05-21T09:00:00Z",
+        "cheap-model",
+        "team-b",
+        80,
+        0,
+        20,
+        0.20,
+    ))
+    .unwrap();
+
+    for i in 0..12 {
+        let mut burst = dated_log_entry(
+            "2026-05-21T09:33:00Z",
+            "cheap-model",
+            "team-b",
+            1,
+            0,
+            1,
+            0.01,
+        );
+        burst.request_id = format!("burst-{i}");
+        db.record_usage(&burst).unwrap();
+    }
+
+    let analytics = db.usage_analytics("day", 10, 10).unwrap();
+
+    assert_eq!(analytics.period, "day");
+    assert_eq!(analytics.trends.len(), 2);
+    assert_eq!(analytics.trends[0].period, "2026-05-20");
+    assert_eq!(analytics.trends[0].requests, 2);
+    assert_eq!(analytics.trends[0].input_tokens, 300);
+    assert_eq!(analytics.trends[0].cached_tokens, 75);
+    assert_eq!(analytics.trends[0].cache_hit_rate, 25.0);
+    assert_eq!(analytics.trends[1].period, "2026-05-21");
+    assert_eq!(analytics.top_models_by_cost[0].name, "expensive-model");
+    assert_eq!(analytics.top_keys_by_requests[0].name, "team-b");
+    assert_eq!(analytics.high_frequency[0].key_name, "team-b");
+    assert_eq!(analytics.high_frequency[0].model, "cheap-model");
+    assert_eq!(analytics.high_frequency[0].requests, 12);
 }

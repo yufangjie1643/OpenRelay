@@ -175,11 +175,13 @@ pub fn load_config(root: &Path) -> Result<AppConfig, ConfigError> {
     if cfg.general_settings.master_key.is_none() {
         cfg.general_settings.master_key = Some(DEFAULT_MASTER_KEY.to_string());
     }
+    crate::secrets::unprotect_config(&mut cfg)?;
     Ok(cfg)
 }
 
 pub fn save_config(root: &Path, cfg: &AppConfig) -> Result<(), ConfigError> {
-    fs::write(config_path(root), serde_json::to_string_pretty(cfg)?)?;
+    let stored = crate::secrets::config_for_storage(root, cfg)?;
+    fs::write(config_path(root), serde_json::to_string_pretty(&stored)?)?;
     fs::write(
         yaml_path(root),
         serde_yaml::to_string(&flatten_for_yaml(cfg))?,
